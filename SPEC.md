@@ -399,13 +399,15 @@ GameLobby/                       # 核心框架（独立插件）
 
 | 命令 | 方向 | 载荷 | 说明 |
 |------|------|------|------|
-| `Start` | host → RAID | matchId,gameId,gameVer,hostName,joinDeadline,duration | 发起开赛（含 gameId/版本，缺该游戏者据此提示） |
+| `Start` | host → RAID | matchId,gameId,gameVer,hostName,joinDeadline,duration,prize | 发起开赛（含 gameId/版本，缺该游戏者据此提示）；`prize` 为末位字段，奖品表经 base64 逗号安全编码（`Comm:PackPrize`），参与端 `UnpackPrize` 还原显示奖品 |
+| `Begin` | host → RAID | matchId,round | 开局信号：host 全员就绪后广播，参与端据此同步进入倒计时（M1 补充） |
 | `Join` | 参与端 → RAID | matchId,playerName | 报名参与 |
 | `Result` | 参与端 → RAID | matchId,playerName,score,round | 上报本轮分数（带上限校验，功能 5） |
+| `Live` | 参与端 → RAID | matchId,name,score | 比赛中节流广播实时分数，仅供观感不裁决 |
 | `Final` | host → RAID | matchId,winner,rankingCSV | 最终排名（rankingCSV：`名字:分数` 逗号分隔，过长截断前 N 名） |
 | `Tie` | host → RAID | matchId,tiedNamesCSV,round,duration | 触发突然死亡加赛（功能 6） |
 | `GetState` | 晚加入者 → RAID | （无） | 询问当前是否有进行中比赛 |
-| `State` | 在场者 → WHISPER | matchId,gameId,phase,remaining,... | 把当前比赛状态回传晚加入者 |
+| `State` | 在场者 → WHISPER | matchId,gameId,phase,remaining,round,duration,host,prize | 把当前比赛状态回传晚加入者；`prize` 为末位字段，同 `Start` 经 base64 逗号安全编码（`Comm:PackPrize`），使晚到/重载者也能看到奖品 |
 | `VersionCheck` | 任意 → RAID | （无） | 请求各端回报版本 |
 | `MyVer` | 任意 → RAID | coreVer,gameListCSV | 回报核心版本与已装游戏 |
 
