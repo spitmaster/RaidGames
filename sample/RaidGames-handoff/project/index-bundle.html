@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>游戏大厅 · GameHall Addon</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;600;700&family=Noto+Sans+SC:wght@400;500;600;700&family=Noto+Serif+SC:wght@600;700&family=JetBrains+Mono:wght@500;600;700&display=swap"
+    rel="stylesheet"
+  />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <template id="__bundler_thumbnail" data-bg-color="#0b0805">
+    <svg viewBox="0 0 1200 800" xmlns="http://www.w3.org/2000/svg">
+      <!-- gold ornate frame -->
+      <rect x="120" y="120" width="960" height="560" fill="#1a140c" stroke="#d6a85b" stroke-width="3"/>
+      <rect x="115" y="115" width="970" height="570" fill="none" stroke="#6b4a22" stroke-width="2"/>
+      <rect x="110" y="110" width="980" height="580" fill="none" stroke="#2a1d0f" stroke-width="3"/>
+      <!-- corner diamond studs -->
+      <g fill="#d6a85b" stroke="#1a1108" stroke-width="2">
+        <rect x="105" y="105" width="20" height="20" transform="rotate(45 115 115)"/>
+        <rect x="1075" y="105" width="20" height="20" transform="rotate(45 1085 115)"/>
+        <rect x="105" y="675" width="20" height="20" transform="rotate(45 115 685)"/>
+        <rect x="1075" y="675" width="20" height="20" transform="rotate(45 1085 685)"/>
+      </g>
+      <!-- title bar divider -->
+      <line x1="160" y1="210" x2="1040" y2="210" stroke="#4a341a" stroke-width="1"/>
+      <line x1="280" y1="211" x2="920" y2="211" stroke="#d6a85b" stroke-width="1" opacity="0.6"/>
+      <!-- title text mark -->
+      <text x="600" y="190" text-anchor="middle" font-family="Cinzel, serif" font-size="34" font-weight="600" fill="#f0c46c" letter-spacing="10" style="text-shadow: 0 0 12px #8a5a1c">游 戏 大 厅</text>
+      <!-- center glyph circle (smash button suggestion) -->
+      <circle cx="600" cy="430" r="110" fill="#8a5a1c"/>
+      <circle cx="600" cy="430" r="110" fill="none" stroke="#d6a85b" stroke-width="5"/>
+      <circle cx="600" cy="420" r="108" fill="url(#smashGrad)" opacity="0.85"/>
+      <defs>
+        <radialGradient id="smashGrad" cx="0.35" cy="0.3">
+          <stop offset="0%" stop-color="#ffd98a"/>
+          <stop offset="40%" stop-color="#f0c46c"/>
+          <stop offset="100%" stop-color="#8a5a1c"/>
+        </radialGradient>
+      </defs>
+      <text x="600" y="445" text-anchor="middle" font-family="Cinzel, serif" font-size="28" font-weight="700" fill="#1a0d00" letter-spacing="6">极 速</text>
+      <!-- cast bar suggestion -->
+      <rect x="200" y="290" width="800" height="20" fill="#0f0b06" stroke="#1a1108" stroke-width="1"/>
+      <rect x="201" y="291" width="520" height="18" fill="#f0c46c"/>
+      <!-- player row hints -->
+      <g fill="#0f0b06" stroke="#1a1108" stroke-width="1">
+        <rect x="200" y="580" width="150" height="32"/>
+        <rect x="360" y="580" width="150" height="32"/>
+        <rect x="520" y="580" width="150" height="32"/>
+        <rect x="680" y="580" width="150" height="32"/>
+        <rect x="840" y="580" width="160" height="32"/>
+      </g>
+      <g fill="none" stroke-width="3">
+        <line x1="200" y1="580" x2="200" y2="612" stroke="#c4945a"/>
+        <line x1="360" y1="580" x2="360" y2="612" stroke="#66d6ee"/>
+        <line x1="520" y1="580" x2="520" y2="612" stroke="#a884e0"/>
+        <line x1="680" y1="580" x2="680" y2="612" stroke="#f0e26a"/>
+        <line x1="840" y1="580" x2="840" y2="612" stroke="#a8d96a"/>
+      </g>
+    </svg>
+  </template>
+
+  <div id="root"></div>
+
+  <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+
+  <script type="text/babel" src="tweaks-panel.jsx"></script>
+  <script type="text/babel" src="components.jsx"></script>
+  <script type="text/babel" src="screens.jsx"></script>
+  <script type="text/babel" src="app.jsx"></script>
+</body>
+</html>
