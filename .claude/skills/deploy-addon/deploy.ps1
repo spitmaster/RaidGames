@@ -83,6 +83,26 @@ if (-not $NoCheck) {
             exit 1
         }
         Write-Ok "通过（$($luaFiles.Count) 个 .lua 文件）"
+
+        # 无头集成测试（加载全插件 + 驱动 UI/状态机/线路/战绩；任一失败中止部署）
+        $harnesses = @("Tests\Match_selftest.lua", "Tests\run_all.lua", "Tests\run_match.lua")
+        $hfail = 0
+        foreach ($h in $harnesses) {
+            $hp = Join-Path $Source $h
+            if (-not (Test-Path $hp)) { continue }
+            $out = & $lua $hp 2>&1
+            if ($LASTEXITCODE -ne 0) {
+                Write-Host "    [测试失败] $h" -ForegroundColor Red
+                ($out | Select-Object -Last 3) | ForEach-Object { Write-Host "      $_" -ForegroundColor Red }
+                $hfail++
+            } else {
+                Write-Ok "测试通过 $h"
+            }
+        }
+        if ($hfail -gt 0) {
+            Write-Host "集成测试失败：$hfail 个 harness 不过，已中止部署（-NoCheck 可跳过）。" -ForegroundColor Red
+            exit 1
+        }
     }
 }
 

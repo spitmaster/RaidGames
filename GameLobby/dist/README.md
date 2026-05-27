@@ -4,17 +4,27 @@
 > 任何串与代码不一致时，**重新生成串**，不要手改串。
 > 本流程对应 SPEC §5「WA 导出与构建」+「三档供给（D16）」，承认纯离线生成完整 WA 串复杂，故 M1 用**半自动**。
 
-## 三档产物（D16，并存不互斥）
+## 产物清单（D16 三档，并存不互斥）
 
-| 文件 | 内容 | 给谁 | 编码 |
-|------|------|------|------|
-| `GameLobby-bundle.wa.txt` ★主推 | 核心 + 极速按键（WA group 聚合单串） | 新人，一串即玩 | `!WA:2!`（WeakAuras 原生） |
-| `GameLobby-core.wa.txt` | 仅核心 | 想先要壳、游戏后补 | `!WA:2!`（WeakAuras 原生） |
-| `SpeedClick.wa.txt` | 仅极速按键（自控游戏载荷） | 已装核心者加新游戏 | `!GL:1!`（本项目自控）或 `!WA:2!` |
+| 文件 | 内容 | 给谁 | 编码 | 状态 |
+|------|------|------|------|------|
+| `SpeedClick.gl.txt` ✅即用 | 仅极速按键（自控游戏载荷） | 已装核心者加新游戏 | `!GL:1!`（本项目自控） | **离线生成、已往返校验，可直接用** |
+| `GameLobby-bundle.wa.txt` ★主推 | 核心 + 极速按键（WA group 聚合单串） | 新人，一串即玩 | `!WA:2!`（WeakAuras 原生） | 占位 — 真机待生成 |
+| `GameLobby-core.wa.txt` | 仅核心 | 想先要壳、游戏后补 | `!WA:2!`（WeakAuras 原生） | 占位 — 真机待生成 |
+| `SpeedClick.wa.txt` | 仅极速按键，给纯 WA 用户 | 不装插件、只用 WeakAuras 的人 | `!WA:2!`（WeakAuras 原生） | 占位 — 真机待生成 |
 
-两种串前缀都被 `Core/GameImport.lua` 的 `ParseWA` 支持：
+### 两种格式 / 两个导入入口（务必分清）
+
+| 格式 | 谁生成 | 导入入口 | 说明 |
+|------|--------|----------|------|
+| **`!GL:1!`**（如 `SpeedClick.gl.txt`） | 仓库 `.lua` **离线**经 `export-tool.lua`/同链路生成，**无需 WeakAuras** | 大厅界面「**+ 导入游戏**」框 → `GL.Import:ImportGame` → 信任门 → 即玩 | 本项目自控裸串；base64 链；零 WeakAuras 结构耦合，最稳。已离线往返校验（解析端 `ParseWA` 还原出的 `code` 字节一致）。 |
+| **`!WA:2!`**（如 `GameLobby-bundle.wa.txt`） | **游戏内** WeakAuras 原生导出（需运行中 WeakAuras + 游戏客户端） | WeakAuras **自带导入框**（也可走大厅导入框，`ParseWA` 同样认） | WeakAuras 现行格式；`EncodeForPrint` 链。给纯 WA 用户 / 全家桶一串即玩。离线无法生成，故为真机待办。 |
+
+两种串前缀都被 `Core/GameImport.lua` 的 `ParseWA` 支持（大厅导入框通吃）：
 - `!WA:2!` → `LibDeflate:DecodeForPrint` → `DecompressDeflate` → `LibSerialize:Deserialize`（WeakAuras 现行格式）
 - `!WA:1!` / `!GL:1!` → `LibBase64.Decode` → `DecompressDeflate` → `Deserialize`（自控/旧式）
+
+> 区别一句话：**`.gl.txt`（`!GL:`）离线可造、即用、进大厅导入框；`.wa.txt`（`!WA:`）需真机 WeakAuras 生成、可进 WA 自带导入框或大厅导入框。**
 
 ## 自控载荷结构（导出端 ↔ 解析端唯一契约）
 
@@ -85,9 +95,10 @@ payload = {
 
 ## 真机待办（M1，需运行中 WeakAuras + 游戏客户端验证）
 
-离线无法生成真串（无 WeakAuras 运行时 / 无游戏客户端），以下标记为 M1 真机待办：
+`!GL:1!` 自控串（`SpeedClick.gl.txt`）已**离线生成并往返校验**（仓库 `.lua` → 序列化/压缩/base64 → `ParseWA` 还原，`code` 字节一致），无需真机即可用。
+`!WA:2!` 串无 WeakAuras 运行时 / 无游戏客户端无法离线生成，以下标记为 M1 真机待办：
 
-- [ ] **A 档真串**：游戏内跑 `export-tool.lua` 生成 `!GL:1!` 串，落 `SpeedClick.wa.txt`。
+- [x] **A 档自控串（`!GL:1!`）**：已离线生成 `SpeedClick.gl.txt` 并往返校验，可直接用。
 - [ ] **B 档真串**：真机 WeakAuras 导出核心 / 全家桶 `!WA:2!` 串，落对应文件。
 - [ ] **回环验证**：把生成的串用大厅「导入游戏字符串」入口导入 → `ParseWA` 解析成功 → 信任门弹出
       → 确认后游戏出现且可发起（无需 /reload）。
