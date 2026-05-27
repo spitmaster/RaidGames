@@ -478,9 +478,12 @@ function W.LootCard(parent, isLeaderEditable)
     stat:SetJustifyH("LEFT")
     card._stat = stat
 
-    -- 团长可编辑：自定义奖品输入框（custom/friendly 模式）
+    -- 自定义奖品输入框（custom/friendly 模式）。
+    -- 始终构建，运行时按身份用 :SetEditable 切换可见/可编辑——避免「团员被提升为团长后
+    -- 输入框不出现 / 团长被降级后仍可编辑」（团长身份在 ROSTER_CHANGED 后会变，SPEC 重点项）。
+    card._editable = isLeaderEditable and true or false
     local input
-    if isLeaderEditable then
+    do
         input = CreateFrame("EditBox", nil, card)
         input:SetPoint("TOPLEFT", iconF, "TOPRIGHT", 14, -4)
         input:SetPoint("RIGHT", card, "RIGHT", -12, 0)
@@ -514,7 +517,8 @@ function W.LootCard(parent, isLeaderEditable)
         prize = prize or { mode = "friendly" }
         local mode = prize.mode or "friendly"
         if mode == "loot" then
-            if self._input then self._input:Hide(); if self._inputMeta then self._inputMeta:Hide() end end
+            -- loot 模式恒为只读展示（战利品来自真实物品，不让团长改文字）
+            self._input:Hide(); if self._inputMeta then self._inputMeta:Hide() end
             self._name:Show(); self._meta:Show(); self._stat:Show()
             local rk = prize.rarity or "epic"
             local rr, rg, rb = theme:Rarity(rk)
@@ -532,12 +536,13 @@ function W.LootCard(parent, isLeaderEditable)
             setRingColor(ar, ag, ab)
             for _, e in pairs(self._iconBorder) do e:SetVertexColor(ar, ag, ab, 1) end
             self._glyph:Hide(); self._iconTex:SetTexture(W.ICON_PRIZE); self._iconTex:Show()
-            if self._input then
+            if self._editable then
                 -- 团长：填入输入框
                 if self._input:GetText() ~= prize.text then self._input:SetText(prize.text) end
                 self._input:Show(); self._name:Hide(); self._meta:Hide(); self._stat:Hide()
                 if self._inputMeta then self._inputMeta:Show() end
             else
+                self._input:Hide(); if self._inputMeta then self._inputMeta:Hide() end
                 self._name:Show(); self._meta:Show(); self._stat:Hide()
                 self._name:SetText(prize.text); self._name:SetTextColor(ar, ag, ab)
                 self._meta:SetText("团长指定  ·  胜者归属")
@@ -548,10 +553,11 @@ function W.LootCard(parent, isLeaderEditable)
             setRingColor(mr, mg, mb)
             for _, e in pairs(self._iconBorder) do e:SetVertexColor(mr, mg, mb, 1) end
             self._glyph:Hide(); self._iconTex:SetTexture(W.ICON_PRIZE); self._iconTex:Show()
-            if self._input then
+            if self._editable then
                 self._input:Show(); self._name:Hide(); self._meta:Hide(); self._stat:Hide()
                 if self._inputMeta then self._inputMeta:Show() end
             else
+                self._input:Hide(); if self._inputMeta then self._inputMeta:Hide() end
                 self._name:Show(); self._meta:Show(); self._stat:Show()
                 self._name:SetText("友谊赛 · 无奖品"); self._name:SetTextColor(theme:RGB("text"))
                 self._meta:SetText("纯切磋  ·  胜者享荣誉")
@@ -559,6 +565,19 @@ function W.LootCard(parent, isLeaderEditable)
                 self._stat:SetTextColor(theme:RGB("textMute"))
             end
         end
+    end
+    -- 包一层 SetPrize：记住最近一次 prize，便于 SetEditable 后无参重渲染。
+    local rawSetPrize = card.SetPrize
+    function card:SetPrize(prize)
+        if prize then self._lastPrize = prize end
+        rawSetPrize(self, prize or self._lastPrize)
+    end
+    -- 运行时切换可编辑性（团长↔团员），随后按当前 prize 重渲染。
+    function card:SetEditable(on)
+        on = on and true or false
+        if self._editable == on then return end
+        self._editable = on
+        self:SetPrize(self._lastPrize or { mode = "friendly" })
     end
     function card:OnPrizeChanged(fn) self._onPrizeChanged = fn end
     return card

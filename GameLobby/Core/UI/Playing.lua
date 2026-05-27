@@ -107,6 +107,7 @@ local function Build(body)
     local cdSub = W.Text(overlay, "display", theme.font.small, "textMute")
     cdSub:SetPoint("TOP", cdNum, "BOTTOM", 0, -16)
     cdSub:SetText("准 备 · 极 速 按 键")
+    overlay._sub = cdSub   -- 暴露副标题，供平局加赛改成「加 赛」提示（Popups 驱动）
     overlay:Hide()
     s._overlay = overlay
     GL.UI._cdOverlay = overlay

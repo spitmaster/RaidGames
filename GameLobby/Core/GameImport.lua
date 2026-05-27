@@ -183,12 +183,19 @@ local function IsPayload(t)
     return type(t) == "table" and t[MAGIC] == true
 end
 
-local function CollectGames(payload, out)
+-- ⚠️ 防御：LibSerialize 支持「自引用 / 共享引用」表（见 LibSerialize.lua:417/551/1614），
+-- 故反序列化出来的 bundle 可能含循环（items[i] 指回 bundle 本身或彼此互指）。CollectGames
+-- 在信任门**之前**跑（ParseWA 纯解析），若不防环，恶意串会让递归无限下去 → 栈溢出崩溃，
+-- 用户连确认框都没看到就崩了。用 visited 去重 + 上限护栏兜底。
+local function CollectGames(payload, out, visited)
     if not IsPayload(payload) then return end
+    visited = visited or {}
+    if visited[payload] then return end   -- 已访问过这张表：循环引用，停止
+    visited[payload] = true
     if payload.kind == "bundle" then
         if type(payload.items) == "table" then
             for _, sub in ipairs(payload.items) do
-                CollectGames(sub, out)
+                CollectGames(sub, out, visited)
             end
         end
     else

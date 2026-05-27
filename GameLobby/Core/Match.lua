@@ -236,7 +236,64 @@ function Match:Start(gameId, opts)
     emit("MATCH_INVITED", ctx)
     logSys((GL.L and GL.L["你发起了一场比赛"]) or "你发起了一场比赛")
     if GL.UI and GL.UI.ShowScreen then GL.UI:ShowScreen("lobby") end
+
+    -- 报名/准备截止保护（SPEC 功能 3：逾期未就绪视为围观）。
+    -- host 端起一个 joinDeadline 秒的定时器：到点仍在 INVITING（host 没开局）则
+    -- 把未就绪、未围观的成员统一标围观，避免「等全员就绪」永久卡住（host 仍可手动开局）。
+    -- 用 matchId 兜底防串场：定时器触发时若已非本局或已离开 INVITING，则空转。
+    local thisMatchId = ctx.matchId
+    After(joinDeadline, function()
+        local cur = Match._ctx
+        if cur.matchId ~= thisMatchId then return end       -- 已换局
+        if cur.phase ~= PHASE.INVITING then return end       -- 已开局/已结束
+        if not cur.isHost then return end
+        local changed = false
+        for _, p in pairs(cur.players) do
+            if not p.ready and not p.spectator and not p.isSelf then
+                p.spectator = true
+                p.autoSpectator = true   -- 标记「截止自动转围观」，与主动围观区分（无插件统计用）
+                changed = true
+            end
+        end
+        if changed then
+            logWarn((GL.L and GL.L["报名截止，未就绪者转为围观"]) or "报名截止，未就绪者转为围观")
+            emit("MATCH_STATE", cur.phase, cur)
+        end
+    end)
     return true
+end
+
+-- host 端统计「X 人无插件无法参与」（SPEC 功能 3 / 测试用例「无插件成员」）。
+-- 数据源（无 VersionCheck 强依赖时的推断）：团队在线成员中，
+--   既未报名就绪（没回 Join，装了插件的人收 Start 后才会 Join/SetReady）、
+--   又非主动围观（围观是插件内显式动作）、且不是自己 → 推断为「未装插件，收不到弹窗」。
+-- 结果写入 ctx.noAddon，并 Emit 一条 LOG warn 让大厅日志条显示（UI 无需新方法即可呈现）。
+-- 仅 host 端有意义（参与端不汇总）。
+function Match:_ComputeNoAddon()
+    local ctx = self._ctx
+    if not ctx.isHost then return 0 end
+    if not GL.Roster then ctx.noAddon = 0; return 0 end
+    local meNorm = GL.Roster:Me()
+    local n = 0
+    for _, m in ipairs(GL.Roster:GetMembers()) do
+        if m.online ~= false and m.nameNorm ~= meNorm then
+            local p = ctx.players and ctx.players[m.nameNorm]
+            -- 装了插件的人：要么 ready（回了 Join），要么 *主动* spectator（围观）。
+            -- 截止自动转的围观（autoSpectator）不算「响应」——那些人很可能就是无插件没回的。
+            local responded = p and (p.ready or (p.spectator and not p.autoSpectator))
+            if not responded then n = n + 1 end
+        end
+    end
+    ctx.noAddon = n
+    if n > 0 then
+        logWarn(string.format("%d 人无插件无法参与", n))
+    end
+    return n
+end
+
+-- 只读取 host 端统计的「无插件人数」（UI/结算可查；无比赛或参与端返回 0）。
+function Match:GetNoAddon()
+    return self._ctx.noAddon or 0
 end
 
 -- host：全员就绪后开局，触发倒计时（契约 §5）。
@@ -245,6 +302,8 @@ function Match:Begin()
     local ctx = self._ctx
     if not ctx.isHost then return false end
     if ctx.phase ~= PHASE.INVITING then return false end
+    -- 开局瞬间统计无插件人数（此时谁回了 Join/围观已定局，SPEC 功能 3）。
+    self:_ComputeNoAddon()
     if GL.Comm and inGroup() then
         GL.Comm:Broadcast("Begin", ctx.matchId, ctx.round or 0)
     end
@@ -584,6 +643,7 @@ function Match:SetSpectator()
     if meNorm and ctx.players[meNorm] then
         ctx.players[meNorm].spectator = true
         ctx.players[meNorm].ready = false
+        ctx.players[meNorm].autoSpectator = nil   -- 主动围观，清除截止自动标记
     end
     emit("MATCH_STATE", ctx.phase, ctx)
     return true

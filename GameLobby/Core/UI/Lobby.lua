@@ -226,6 +226,14 @@ local function Build(body)
             if ok then canInit = r end
         end
 
+        -- 奖品卡可编辑性随身份切换（团长可编辑输入框；团员只读）。
+        -- 比赛进行中（非 IDLE）一律只读：奖品已定，参与端不应再改。
+        if self._lootCard and self._lootCard.SetEditable then
+            local ctx = GL.Match and GL.Match.GetContext and GL.Match:GetContext()
+            local matchOngoing = ctx and ctx.phase and ctx.phase ~= "IDLE"
+            self._lootCard:SetEditable(leader and not matchOngoing)
+        end
+
         if leader then
             self._readyBtn:Hide(); self._startBtn:Show()
             local allReady = totalMembers == 0 or readyCount >= totalMembers

@@ -75,11 +75,14 @@ ctx = {
   round     = 0,                 -- 0=正赛，≥1=加赛轮次
   remaining = 6.3,               -- 剩余秒（仅 PLAYING 有意义）
   prize     = { mode="loot"|"custom"|"friendly", itemLink=?, text=?, rarity=? },
-  players   = { [nameNorm] = { name, classFile, ready=bool, isSelf, isLeader, spectator=bool } },
+  players   = { [nameNorm] = { name, classFile, ready=bool, isSelf, isLeader, spectator=bool, autoSpectator=bool? } },
   scores    = { [nameNorm] = number },   -- 实时/最终分数
   ranking   = { {name, score, cps, classFile}, ... }, -- 仅 host 计算后、FINAL 时填充（带 classFile 供 UI 直接着色）
   winner    = "Healer-服务器",
+  noAddon   = 2,                 -- host 端推断的「无插件无法参与」人数（Begin 时算；参与端为 0/nil）
 }
+-- autoSpectator：报名截止保护（SPEC 功能 3）到点后被自动转围观的成员标记；
+--   与玩家主动「围观」区分，仅 host 的无插件统计用（自动转的算「未响应」=可能无插件）。
 ```
 
 ---
@@ -158,6 +161,7 @@ GL.Match:SetSpectator()        -- 围观
 GL.Match:ReportScore(score)    -- 当前端上报本轮分数 → Comm Result
 -- 通用
 GL.Match:GetContext()          -- 返回当前 ctx（见 §2），无比赛时 phase=IDLE
+GL.Match:GetNoAddon()          -- host 端「无插件无法参与」人数（SPEC 功能 3）；Begin 时算，写入 ctx.noAddon；参与端返回 0
 GL.Match:Close()
 ```
 
@@ -169,6 +173,8 @@ GL.Match:Close()
 - 在 phase 切换/倒计时/开局/结束/最终/平局各点 `Emit` 对应事件（§2）。
 - 在 PLAY_BEGIN/END 调用当前游戏的 `host`/`client` 生命周期（§6）。
 - 同一时刻只允许一场（已有进行中再发起被拒，Emit LOG warn）。
+- 报名截止保护（SPEC 功能 3）：host 发起后起 joinDeadline 秒定时器，到点仍在 INVITING 则把未就绪/未围观者自动转围观（标 autoSpectator）+ Emit LOG warn，避免「等全员就绪」永久卡住。
+- 无插件统计（SPEC 功能 3）：Begin 时 host 推断「未回 Join 且非主动围观」的在线成员为无插件，写 ctx.noAddon + Emit LOG warn「X 人无插件无法参与」。
 
 ---
 

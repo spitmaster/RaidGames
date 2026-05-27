@@ -63,7 +63,9 @@ local function makeHistoryRow(parent)
         local glyph = ""
         if GL.Games and GL.Games.Get and h.gameId then
             local def = GL.Games:Get(h.gameId)
-            if def and def.glyph then glyph = def.glyph .. " " end
+            -- glyph 可能是贴图路径（如 SpeedClick 用 Interface\Icons\...），
+            -- 必须经 GlyphMarkup 转成内联贴图串，否则会把路径原文当文字显示。
+            if def and def.glyph then glyph = W.GlyphMarkup(def.glyph, 14) .. " " end
         end
         self._game:SetText(string.format("%s%s · %d 人", glyph, h.gameName or h.gameId or "?", h.count or 0))
         -- 奖品
