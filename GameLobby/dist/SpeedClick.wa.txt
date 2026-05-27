@@ -1,0 +1,25 @@
+=== GameLobby 分发串：极速按键（仅游戏） ===
+档位：SpeedClick.wa.txt —— 给「已装核心」的人加这一个游戏，免重发核心（SPEC 功能 9）。
+导入后游戏立即出现并可玩，无需 /reload（GL.Import:ImportGame 走 _pendingGames 或直接 RegisterGame）。
+
+------------------------------------------------------------------
+[占位 — 待真机生成]
+本档真串尚未生成。M1 半自动流程见 dist/README.md「生成步骤」。
+生成命令（游戏内，装好核心后）：
+  /run GameLobby_Export.Game("speedclick", <SpeedClick.lua 的 return def 源码>, {name="极速按键", version="1.0.0"})
+把打印出来的 "!GL:1!...." 整行替换掉本占位区，提交到仓库。
+------------------------------------------------------------------
+
+载荷结构（自控固定字段，导出端/解析端共用契约，见 Core/GameImport.lua 顶部注释）：
+{
+  __gl    = true,
+  kind    = "game",
+  id      = "speedclick",
+  name    = "极速按键",
+  version = "1.0.0",
+  coreMin = "0.1.0",
+  source  = "RaidGames 官方",
+  code    = "<-- Games/SpeedClick.lua 改写成 `return def` 的源码字符串 -->",
+}
+
+串前缀 !GL:1! → base64(LibDeflate.CompressDeflate(LibSerialize.Serialize(payload)))

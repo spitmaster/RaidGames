@@ -1,0 +1,14 @@
+<Ui xmlns="http://www.blizzard.com/wow/ui/"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.blizzard.com/wow/ui/ ..\FrameXML\UI.xsd">
+    <!--
+        内嵌第三方库（不依赖大脚 / BigFoot，对应架构不变量 #5）。
+        加载顺序：LibStub 先注册，LibDeflate / LibSerialize 借 LibStub 注册取用。
+        来源与版本见 Libs/README.md。
+    -->
+    <Script file="LibStub\LibStub.lua"/>
+    <Script file="LibBase64\LibBase64.lua"/>
+    <Script file="ChatThrottleLib\ChatThrottleLib.lua"/>
+    <Script file="LibDeflate\LibDeflate.lua"/>
+    <Script file="LibSerialize\LibSerialize.lua"/>
+</Ui>

@@ -1,0 +1,51 @@
+## Interface: 38001
+## Title: 游戏大厅 |cff808080GameLobby|r
+## Notes: 团本后用小游戏比赛决定战利品归属，替代单纯 roll 点。首发游戏「极速按键」。
+## Author: zyj
+## Version: 0.1.0
+## SavedVariables: GameLobbyDB
+## X-Website: https://github.com/zyj/RaidGames
+## X-Category: Raid
+
+# ============================================================
+# 加载顺序见 docs/contracts.md §10。不依赖 BigFoot / 大脚（架构不变量 #5）。
+# 尚未实现的模块为占位 stub（首行 local self = aura_env or {}），
+# 另两个 agent 直接往 stub 里填实现，不必动本 .toc。
+# ============================================================
+
+# --- 引导（建立 _G.GameLobby + 事件总线，必须最先）---
+Core\Bootstrap.lua
+
+# --- 内嵌库（不依赖大脚）---
+Libs\embeds.xml
+
+# --- 通讯层 ---
+Core\Comm.lua
+
+# --- 核心模块 ---
+Core\Roster.lua
+Core\GameRegistry.lua
+Core\Stats.lua
+Core\Match.lua
+
+# --- UI（theme 先，frame 次，screens/widgets/popups 后）---
+Core\UI\Theme.lua
+Core\UI\Frame.lua
+Core\UI\Widgets.lua
+Core\UI\Lobby.lua
+Core\UI\Playing.lua
+Core\UI\Results.lua
+Core\UI\History.lua
+Core\UI\About.lua
+Core\UI\ImportPanel.lua
+Core\UI\ExportPanel.lua
+Core\UI\Popups.lua
+
+# --- 导入/导出（Phase 2）---
+Core\GameImport.lua
+
+# --- 游戏（最后；RegisterGame 时核心已就绪）---
+Games\SpeedClick.lua
+
+# --- 引导器（最末，触发 GL:Init 队列 flush + 回收待注册游戏）---
+Core\Init.lua

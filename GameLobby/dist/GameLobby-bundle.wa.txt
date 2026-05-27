@@ -1,0 +1,22 @@
+=== GameLobby 分发串：全家桶（核心 + 极速按键）★主推★ ===
+档位：GameLobby-bundle.wa.txt —— 新人复制一串、粘贴即玩。直接服务「低门槛传播」一等目标（SPEC §1、D16）。
+用 WeakAuras group（群组）聚合为单串，含两个子 aura：核心 + 极速按键。导入一次装好全部。
+
+------------------------------------------------------------------
+[占位 — 待真机生成]
+全家桶必须用「WeakAuras group 原生导出」生成（单串、含多子项）。
+
+生成步骤（真机 WeakAuras，见 dist/README.md「核心/全家桶 = WeakAuras group 导出」）：
+  1) 建一个 WeakAuras group（群组）。
+  2) group 内建子 aura A =「核心」：贴 Core/*.lua + Libs/*.lua（同 core 档）。
+  3) group 内建子 aura B =「极速按键」：贴 Games/SpeedClick.lua（return def 形态可省，子插件形态即可，
+     因为它自带 `if GL and GL.RegisterGame then ... elseif GL._pendingGames` 的加载顺序兜底）。
+  4) 右键 group → 导出 → 得到含两子项的 "!WA:2!...." 单串。
+  5) 整行替换本占位区，提交。
+------------------------------------------------------------------
+
+加载顺序保证（SPEC §5 / D16，已在代码中实现，无需在串里处理）：
+  - 子 aura 运行先后不保证。极速按键子项若先于核心跑，RegisterGame 时 _G.GameLobby 还没有
+    GL.RegisterGame → 压入 GL._pendingGames（Bootstrap 已建该队列）→ 核心引导后 Init.lua flush 回收。
+  - 版本门控逐组件独立：已装核心的用户导入全家桶，核心子项按版本门控自动让位（不降级/不重复），
+    极速按键子项照常注册，互不冲突。
