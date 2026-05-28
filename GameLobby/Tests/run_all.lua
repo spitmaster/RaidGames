@@ -164,6 +164,28 @@ step("Emit MATCH_INVITED → UI:Invite", function()
     if GL.UI.Invite then GL.UI:Invite(ctx) end
 end)
 
+-- ============ 7b) 单人模式：CanInitiate + Match:Start 自动 Begin → 跑通一局 ============
+print("== 7b) 单人模式 ==")
+env.state.inGroup = false; env.state.inRaid = false; env.state.isLeader = false
+env.state.members = { { name = "Tester", classFile = "WARRIOR", online = true } }
+env.FireEvent("GROUP_ROSTER_UPDATE")
+if GL.Match.Close then GL.Match:Close() end
+step("CanInitiate 单人允许", function() assert(GL.Roster:CanInitiate(), "单人应允许发起") end)
+step("Match:Start 单人 → 自动进入 COUNTDOWN", function()
+    GL.Match:Start("speedclick", { prize = { mode = "friendly" } })
+    -- Start 内部应自动 Begin → setPhase(COUNTDOWN)
+    local p = GL.Match:GetContext() and GL.Match:GetContext().phase
+    assert(p == "COUNTDOWN" or p == "PLAYING", "solo Start 后应进入倒计时/比赛，实际: " .. tostring(p))
+end)
+step("单人推进比赛 + ReportScore + 收尾", function()
+    env.advance(5); if GL.Match.ReportScore then GL.Match:ReportScore(80) end
+    env.advance(15)
+    local p = GL.Match:GetContext() and GL.Match:GetContext().phase
+    assert(p == "RESULTS" or p == "IDLE", "单人比赛收尾 phase 异常: " .. tostring(p))
+end)
+step("单人 Results 屏渲染", function() GL.UI:ShowScreen("results") end)
+if GL.Match.Close then GL.Match:Close() end
+
 -- ============ 8) 导出（reason 路径 + 占位游戏）============
 print("== 8) 导出 ==")
 step("ExportGame(speedclick) 成功", function()

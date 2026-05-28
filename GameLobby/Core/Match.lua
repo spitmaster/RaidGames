@@ -237,6 +237,12 @@ function Match:Start(gameId, opts)
     logSys((GL.L and GL.L["你发起了一场比赛"]) or "你发起了一场比赛")
     if GL.UI and GL.UI.ShowScreen then GL.UI:ShowScreen("lobby") end
 
+    -- 单人模式：无人等准备，直接开局。
+    if not (GL.Roster and GL.Roster:InGroup()) then
+        self:Begin()
+        return true
+    end
+
     -- 报名/准备截止保护（SPEC 功能 3：逾期未就绪视为围观）。
     -- host 端起一个 joinDeadline 秒的定时器：到点仍在 INVITING（host 没开局）则
     -- 把未就绪、未围观的成员统一标围观，避免「等全员就绪」永久卡住（host 仍可手动开局）。

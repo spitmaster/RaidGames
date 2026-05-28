@@ -125,8 +125,15 @@ local function Build(body)
     local startBtn = W.Button(actionRow, "开 始 比 赛", "primary", "lg")
     startBtn:SetPoint("RIGHT", actionRow, "RIGHT", 0, 0)
     startBtn:SetScript("OnClick", function()
+        if not GL.Match then return end
+        -- 二段调度：INVITING 阶段 host 点击 = 「立即开局」(Begin)；IDLE = 发起 (Start)。
+        local ctx = GL.Match.GetContext and GL.Match:GetContext()
+        if ctx and ctx.phase == "INVITING" and ctx.isHost then
+            if GL.Match.Begin then GL.Match:Begin() end
+            return
+        end
         if not s._selectedGame then return end
-        if not GL.Match or not GL.Match.Start then
+        if not GL.Match.Start then
             if GL.UI.Log then GL.UI:Log("warn", "比赛模块尚未就绪") end
             return
         end
@@ -226,23 +233,36 @@ local function Build(body)
             if ok then canInit = r end
         end
 
-        -- 奖品卡可编辑性随身份切换（团长可编辑输入框；团员只读）。
+        -- 奖品卡可编辑性随身份切换（可发起者可编辑：单人/团长/助理；其他成员只读）。
         -- 比赛进行中（非 IDLE）一律只读：奖品已定，参与端不应再改。
+        local inGroup = GL.Roster and GL.Roster.InGroup and GL.Roster:InGroup()
         if self._lootCard and self._lootCard.SetEditable then
             local ctx = GL.Match and GL.Match.GetContext and GL.Match:GetContext()
             local matchOngoing = ctx and ctx.phase and ctx.phase ~= "IDLE"
-            self._lootCard:SetEditable(leader and not matchOngoing)
+            self._lootCard:SetEditable(canInit and not matchOngoing)
         end
 
-        if leader then
+        if canInit then
             self._readyBtn:Hide(); self._startBtn:Show()
-            local allReady = totalMembers == 0 or readyCount >= totalMembers
-            if allReady then
-                self._statusText:SetText(W.ICON.ready .. " 全员就绪")
+            -- 按钮文案随阶段切换：INVITING 阶段 host 显示「立即开局」(对应 Begin)。
+            local ctx = GL.Match and GL.Match.GetContext and GL.Match:GetContext()
+            local inviting = ctx and ctx.phase == "INVITING" and ctx.isHost
+            if self._startBtn.SetLabel then
+                self._startBtn:SetLabel(inviting and "立 即 开 局" or "开 始 比 赛")
+            end
+            if not inGroup then
+                -- 单人模式：无须等准备，直接开始。
+                self._statusText:SetText(W.ICON.ready .. " 单人模式 · 准备开始")
                 self._statusText:SetTextColor(theme:RGB("success"))
             else
-                self._statusText:SetText(string.format("等待 %d 人准备", math.max(0, totalMembers - readyCount)))
-                self._statusText:SetTextColor(theme:RGB("textMute"))
+                local allReady = totalMembers == 0 or readyCount >= totalMembers
+                if allReady then
+                    self._statusText:SetText(W.ICON.ready .. " 全员就绪")
+                    self._statusText:SetTextColor(theme:RGB("success"))
+                else
+                    self._statusText:SetText(string.format("等待 %d 人准备", math.max(0, totalMembers - readyCount)))
+                    self._statusText:SetTextColor(theme:RGB("textMute"))
+                end
             end
             local selDef = self._selectedGame and GL.Games and GL.Games.Get and GL.Games:Get(self._selectedGame)
             local playable = self._selectedGame and (not selDef or not selDef.locked) and canInit

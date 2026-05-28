@@ -75,9 +75,11 @@ function Roster:IsAssist()
     return UnitIsGroupAssistant("player") and true or false
 end
 
--- 能否发起：必须在队伍/团队中，且是团长或助理（SPEC 功能 1/2）。
+-- 能否发起：
+--   - 单人：允许（自己跟自己玩，无需身份）；
+--   - 小队/团队：仍需团长或助理（SPEC 功能 1/2，避免随便发起骚扰团队）。
 function Roster:CanInitiate()
-    if not self:InGroup() then return false end
+    if not self:InGroup() then return true end
     return self:IsLeader() or self:IsAssist()
 end
 
