@@ -261,6 +261,129 @@ function Comm:Whisper(target, cmd, ...)
 end
 
 ------------------------------------------------------------
+-- 分片收发原语（业务无关，契约 §6 P2P / D17）
+------------------------------------------------------------
+-- 设计：把一段大字符串切成 ≤ 安全字节的若干条 WHISPER 逐条发；接收端按 seq 重组。
+-- 业务无关：Comm 不知道发的是"游戏代码"还是别的——它只负责「带 data 末位字段的分片」
+-- 的切分/编码/重组原语。推送业务逻辑（offer/accept/deny、信任门、注册）在 GL.Push。
+--
+-- 为什么 data 放末位字段、用 SplitLead 切分：data 是 base64(!GL:) 串，理论上无逗号，
+-- 但为了与 §0「字段内禁逗号」彻底解耦、且与 Decode/SplitLead 语义一致，data 一律当作
+-- 「剩余原文」放在最后一段（leadCount 个前导字段之后），重组端用 SplitLead 精确取回。
+--
+-- 字节预算：单条 ≤ MAX_BYTES(255)。一条分片的线路文本是
+--   cmd "," lead1 "," lead2 ... "," seq "," nChunks "," <dataSlice>
+-- 故每片可放的 data 长度 = MAX_BYTES - (前导字段编码后长度 + 各逗号)。
+-- 我们对每片**实际计算**前导开销，再切分，避免拍脑袋留余量过多/过少。
+
+-- 单条分片的「非 data 开销」字节数：Encode(cmd, lead..., seq占位, nChunks占位, "") 的长度。
+-- seq/nChunks 用最坏宽度估（用 nChunks 自身的位数 + 给 seq 同等位数），确保每片都装得下。
+local function chunkOverhead(cmd, leadArgs, nChunks)
+    -- 用一个「空 data」的样板编码量长度；seq 取与 nChunks 同位数的最坏值。
+    local widthN = #tostring(nChunks)
+    local seqSample = string.rep("9", widthN)
+    local nSample = tostring(nChunks)
+    local parts = { cmd }
+    for _, v in ipairs(leadArgs) do parts[#parts + 1] = (v == nil) and "" or tostring(v) end
+    parts[#parts + 1] = seqSample
+    parts[#parts + 1] = nSample
+    parts[#parts + 1] = ""   -- 空 data
+    return #table.concat(parts, Comm.SEP)
+end
+
+-- 把 data 按 sliceBudget 切成若干片（每片 ≤ sliceBudget 字节）。返回数组。
+-- ⚠️ 不在多字节 UTF-8 中点切：data 是 base64 串（纯 ASCII，无多字节问题），直接按字节切安全。
+local function sliceData(data, sliceBudget)
+    if sliceBudget < 1 then sliceBudget = 1 end
+    local out = {}
+    local total = #data
+    local pos = 1
+    while pos <= total do
+        local stop = math.min(pos + sliceBudget - 1, total)
+        out[#out + 1] = string.sub(data, pos, stop)
+        pos = stop + 1
+    end
+    if #out == 0 then out[1] = "" end   -- 空 data 也至少发 1 片
+    return out
+end
+
+-- 把 data 切片，逐条 WHISPER 发给 target，每条形如：
+--   cmd, lead1, lead2, ..., seq, nChunks, <dataSlice>
+-- leadArgs 为前导业务字段（如 gameId），nil 编码为空串。
+-- 返回 nChunks（实际发出的片数），失败返回 nil。
+function Comm:SendChunked(target, cmd, leadArgs, data)
+    if not target or type(cmd) ~= "string" then return nil end
+    leadArgs = leadArgs or {}
+    data = tostring(data or "")
+
+    -- 两轮：先用一个保守 nChunks 估开销算每片预算，再据真实片数复算开销切分。
+    -- 取一个稳定不动点：先按「假设很多片」算最坏开销，得到片数后开销若位数变小只会更省，
+    -- 故用首轮（较大）开销切出的片数是安全上界，直接用它发送即可（不会有片超长）。
+    local guessN = math.max(1, math.ceil(#data / 200) + 1)  -- 粗估片数（仅为估位宽）
+    local overhead = chunkOverhead(cmd, leadArgs, guessN)
+    local sliceBudget = Comm.MAX_BYTES - overhead
+    if sliceBudget < 1 then sliceBudget = 1 end
+
+    local slices = sliceData(data, sliceBudget)
+    local nChunks = #slices
+
+    -- 用真实 nChunks 复核开销（位数可能比 guessN 小 → 预算更大 → 仍安全；只是片可能略空）。
+    for seq, slice in ipairs(slices) do
+        local args = {}
+        for i = 1, #leadArgs do args[i] = leadArgs[i] end
+        args[#args + 1] = seq
+        args[#args + 1] = nChunks
+        args[#args + 1] = slice
+        local text = Comm.Encode(cmd, unpack(args))
+        rawSend(text, "WHISPER", target)
+    end
+    return nChunks
+end
+
+-- 分片重组器：业务模块为每个传输会话建一个 reassembler，逐片喂入，收齐返回完整串。
+-- 健壮性（契约 §6）：nChunks 上限护栏、重复 seq 去重、收齐才返回。
+-- 用法：
+--   local r = Comm:NewReassembler(nChunks)   -- nChunks 越界返回 nil（调用方据此拒收）
+--   local done, full = r:Feed(seq, data)     -- done=true 时 full 是重组好的完整串
+-- 业务模块（Push）负责：会话 key（来源+gameId）、超时丢弃、来源校验——那些是业务策略。
+local MAX_CHUNKS = 256   -- 单次传输分片上限护栏（单游戏 !GL: 串几 KB，~256 片足够；防恶意刷屏）
+
+function Comm:NewReassembler(nChunks)
+    nChunks = tonumber(nChunks)
+    if not nChunks or nChunks < 1 or nChunks > MAX_CHUNKS then
+        return nil   -- 越界：调用方拒收该传输
+    end
+    local r = {
+        nChunks = nChunks,
+        got = 0,            -- 已收到的不同 seq 数
+        parts = {},         -- [seq] = data（去重：同 seq 只认第一份）
+    }
+    function r:Feed(seq, data)
+        seq = tonumber(seq)
+        if not seq or seq < 1 or seq > self.nChunks then
+            return false, nil   -- seq 越界，忽略
+        end
+        if self.parts[seq] ~= nil then
+            return false, nil   -- 重复 seq，去重忽略
+        end
+        self.parts[seq] = tostring(data or "")
+        self.got = self.got + 1
+        if self.got < self.nChunks then
+            return false, nil
+        end
+        -- 收齐：按 seq 顺序拼接。
+        local buf = {}
+        for i = 1, self.nChunks do
+            buf[i] = self.parts[i] or ""
+        end
+        return true, table.concat(buf)
+    end
+    return r
+end
+
+Comm.MAX_CHUNKS = MAX_CHUNKS
+
+------------------------------------------------------------
 -- handler 注册与路由
 ------------------------------------------------------------
 

@@ -76,6 +76,35 @@ frame:SetScript("OnEvent", function(_, event, isInitialLogin, isReloadingUi)
     end
 end)
 
+-- WA 同体兜底（关键）：WeakAuras 通常在**登录之后**才注入 aura 的 On Init 代码，
+-- 此时 PLAYER_LOGIN 与首次 PLAYER_ENTERING_WORLD 多半都已过去——事件帧永远等不到，
+-- 于是永不 flush，/gl 不注册、整核心"装了却没反应"（且时光服吞报错，毫无提示）。
+-- 故：进场时若已登录，立即补一次 flush。
+--   插件路径下本文件加载早于登录，IsLoggedIn()=false，此分支不触发，仍走事件帧（行为不变）。
+--   tryFlush 内有 _initDone once 守卫，事件帧之后再触发也不会重复 flush。
+if IsLoggedIn and IsLoggedIn() then
+    -- 延一帧再 flush（跨 aura 顺序加固）：触发器版下核心被拆成多块，各块各一个
+    -- PLAYER_ENTERING_WORLD 自定义触发器，在同一个 PEW 帧内按**不确定**顺序执行。
+    -- 若带 Init 的块先于带 slash 注册(Frame.lua)的块跑，同步 flush 会扑空（回调还没排队）。
+    -- C_Timer.After(0,...) 延到下一帧：确保本 PEW 帧内所有触发器块都跑完、各模块都把
+    -- GL:Init 回调排好之后再 flush。tryFlush 内有 _initDone once 守卫，重复触发也安全。
+    -- 注意：仅此「已登录注入」分支延迟；事件帧里的 PLAYER_LOGIN/PEW 仍同步 flush
+    -- （插件路径 + 无头测试 run_all.lua FireEvent 后同步断言 slash 已注册，依赖同步）。
+    if C_Timer and C_Timer.After then
+        C_Timer.After(0, tryFlush)
+    else
+        tryFlush()
+    end
+    -- 已登录注入：PEW 多半也过了，补一次状态恢复询问（晚加入/重载场景）。
+    if GL.Comm and GL.Comm.Broadcast and GL.Roster then
+        C_Timer.After(1.5, function()
+            if GL.Roster:GetChannel() then
+                GL.Comm:Broadcast("GetState")
+            end
+        end)
+    end
+end
+
 -- 登记卸载钩子：热升级让位时停掉本帧。
 GL:_RegisterTeardown(function()
     if frame then

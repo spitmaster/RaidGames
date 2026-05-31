@@ -42,7 +42,9 @@ function GL.UI:Invite(ctx)
             if GL.Match and GL.Match.SetSpectator then GL.Match:SetSpectator() end
             GL.UI:Show(); GL.UI:ShowScreen("lobby")
         end,
-        OnCancel = function() end,   -- 拒绝：什么都不做
+        -- 不要 OnCancel：WLK 3.3.5 的 StaticPopup 不允许 OnCancel 与 OnButton2 并存
+        -- （StaticPopup.lua:289 assert）。button3「拒绝」/ESC/超时 = 不做任何事 = 不参与，
+        -- 无需显式 OnCancel（原本也只是空函数）。
         timeout = 30,
         whileDead = true,
         hideOnEscape = true,
@@ -159,9 +161,9 @@ end
 -- GL.UI:Log(level, text) —— 写日志条（系统/战团/警告）
 ------------------------------------------------------------
 
-function GL.UI:Log(level, text)
+function GL.UI:Log(level, text, onClick)
     local log = self._lobbyLog
-    if log and log.Push then log:Push(level, text) end
+    if log and log.Push then log:Push(level, text, onClick) end
 end
 
 ------------------------------------------------------------

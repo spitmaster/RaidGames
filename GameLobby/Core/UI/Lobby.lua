@@ -13,7 +13,13 @@ local theme = GL.UI.theme
 local W = GL.UI.Widgets
 
 local PLAYER_COLS = 5
-local TILE_COLS_W = 180   -- game-tile 最小宽
+-- game-tile 最小宽：设计稿是 5 列 + minmax(170px)，880 宽窗体的 body 836，5 列 tile 宽 ≈ 159。
+-- 把阈值压到 140，让 cols 计算公式 (gridW+10)/(W+10) 选到 5。
+local TILE_COLS_W = 140
+-- game-tile 高度（与 GameTile.lua 的 SetSize 高度保持一致）+ 行间距 = 行步长。
+local TILE_H = 120
+local TILE_GAP = 10
+local TILE_STRIDE = TILE_H + TILE_GAP
 
 local function Build(body)
     local s = CreateFrame("Frame", nil, body)
@@ -93,7 +99,7 @@ local function Build(body)
     local gGrid = CreateFrame("Frame", nil, s)
     gGrid:SetPoint("TOPLEFT", gLabel, "BOTTOMLEFT", 0, -2)
     gGrid:SetPoint("RIGHT", s, "RIGHT", 0, 0)
-    gGrid:SetHeight(104)
+    gGrid:SetHeight(TILE_H)
     s._gGrid = gGrid
 
     ------------------------------------------------------------
@@ -198,6 +204,8 @@ local function Build(body)
                 isLeader = m.isLeader,
                 ready = pdata and pdata.ready,
                 spectator = pdata and pdata.spectator,
+                -- 右键推送目标：用归一化全名（带 -realm，WHISPER 认）。
+                pushTarget = m.nameNorm or m.name,
             }
             card:SetData(data)
             card:Show()
@@ -295,8 +303,8 @@ local function Build(body)
             if ok and res then list = res end
         end
         for _, t in ipairs(self._gameTiles) do t:Hide() end
-        local cols = math.max(1, math.floor((self._gGrid:GetWidth() + 10) / (TILE_COLS_W + 10)))
-        local tileW = (self._gGrid:GetWidth() - (cols - 1) * 10) / cols
+        local cols = math.max(1, math.floor((self._gGrid:GetWidth() + TILE_GAP) / (TILE_COLS_W + TILE_GAP)))
+        local tileW = (self._gGrid:GetWidth() - (cols - 1) * TILE_GAP) / cols
         local i = 0
         for _, def in ipairs(list) do
             i = i + 1
@@ -322,9 +330,9 @@ local function Build(body)
             local col = (i - 1) % cols
             local rowN = math.floor((i - 1) / cols)
             tile:ClearAllPoints()
-            tile:SetPoint("TOPLEFT", self._gGrid, "TOPLEFT", col * (tileW + 10), -rowN * 106)
+            tile:SetPoint("TOPLEFT", self._gGrid, "TOPLEFT", col * (tileW + TILE_GAP), -rowN * TILE_STRIDE)
         end
-        self._gGrid:SetHeight(math.max(96, math.ceil(i / cols) * 106))
+        self._gGrid:SetHeight(math.max(TILE_H, math.ceil(i / cols) * TILE_STRIDE - TILE_GAP))
         self:RefreshGameSelection()
     end
 

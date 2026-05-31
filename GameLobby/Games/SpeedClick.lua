@@ -53,10 +53,13 @@ return {
         end
 
         -- OnMouseDown 计数（SPEC 功能 4：每次按下都计入，不等 click）。
-        -- 用闭包持 api；保存旧 handler 以便结束时还原（防残留）。
+        -- 计分放第一行——它是核心功能，绝不能依赖任何视觉调用（视觉真机抛错不该连累计分）。
+        -- 按下动效走按钮的公开方法 :PlayPress()，pcall 兜底：抛错也不影响计数。
+        -- 仍存旧 handler 供 cleanup 还原（防残留）。
         btn._gl_prevMouseDown = btn:GetScript("OnMouseDown")
         btn:SetScript("OnMouseDown", function()
             api:AddScore(1)
+            if btn.PlayPress then pcall(function() btn:PlayPress() end) end
         end)
         if btn.Enable then btn:Enable() end
 

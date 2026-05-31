@@ -311,7 +311,16 @@ _G.ChatThrottleLib = {
 
 -- 弹窗/菜单
 _G.StaticPopupDialogs = {}
-_G.StaticPopup_Show = function(which) return _G.StaticPopupDialogs[which] and M.newRegion(nil, nil, "Frame") end
+_G.StaticPopup_Show = function(which)
+    local d = _G.StaticPopupDialogs[which]
+    if not d then return nil end
+    -- 复刻 WLK 3.3.5 StaticPopup.lua:289 的约束：OnCancel 与 OnButton2 不可并存
+    -- （真机会 assert 报错；桩里也查，让这类弹窗 bug 离线就能抓到）。
+    if d.OnCancel and d.OnButton2 then
+        error("Dialog " .. tostring(which) .. " cannot have both OnCancel and OnButton2")
+    end
+    return M.newRegion(nil, nil, "Frame")
+end
 _G.StaticPopup_Hide = function() end
 _G.UIDropDownMenu_Initialize = function() end
 _G.UIDropDownMenu_AddButton = function() end

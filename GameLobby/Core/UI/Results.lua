@@ -23,9 +23,9 @@ local function Build(body)
     banner:SetPoint("TOP", s, "TOP", 0, 0)
     banner:SetWidth(420)
     W.PanelBG(banner, "panelInset")
-    -- 径向金光底
-    local halo = W.GlowHalo(banner, "accentDeep", 0.5)
-    halo:SetSize(440, 110); halo:SetPoint("CENTER")
+    -- 胜利者横幅的"金光"：原来用 GlowHalo（径向圆纹理）铺在 420×96 的矩形 banner 上，
+    -- 渲染成一个椭圆光斑漂在横幅下方（"莫名其妙的椭圆"）。去掉它，靠下面的 accent 描边
+    -- + winName 的 GlowText 文字发光来表达"高光感"，不再用矩形泛光。
     -- accent 边框
     local bring = {}
     do
@@ -66,34 +66,32 @@ local function Build(body)
     ------------------------------------------------------------
     -- ③ final-board
     ------------------------------------------------------------
+    -- fbLabel 用 award.BOTTOMLEFT +100 起、s.RIGHT -4 收（贴回 banner 视觉宽度，左对齐 banner.left）。
     local fbLabel = W.SectionLabel(s, "最终排名")
     fbLabel:SetPoint("TOPLEFT", award, "BOTTOMLEFT", 100, -12)
     fbLabel:SetPoint("RIGHT", s, "RIGHT", -4, 0)
     s._fbLabel = fbLabel
 
+    -- board 直接铺满 s 全宽（贴 s.LEFT，不再继承 fbLabel.left 那个 +100 偏移），
+    -- 否则 board 整体偏右 → 单列 row 在 board 内居中也仍然视觉偏右。
     local board = CreateFrame("Frame", nil, s)
-    board:SetPoint("TOPLEFT", fbLabel, "BOTTOMLEFT", 0, -2)
+    board:SetPoint("TOP",   fbLabel, "BOTTOM", 0, -2)
+    board:SetPoint("LEFT",  s, "LEFT",   4, 0)
     board:SetPoint("RIGHT", s, "RIGHT", -4, 0)
     board:SetPoint("BOTTOM", s, "BOTTOM", 0, 46)
     s._board = board
 
     ------------------------------------------------------------
-    -- ④ 操作行
+    -- ④ 操作行（仅「返回大厅」。原「再来一局」去掉：它并不直接开新局，只是回大厅，多余；
+    --   想再玩在大厅重新发起即可。结算结果会写进大厅日志，可点击重开本窗口看排名。）
     ------------------------------------------------------------
-    local closeBtn = W.Button(s, "关 闭", "default")
-    closeBtn:SetPoint("BOTTOMLEFT", s, "BOTTOMLEFT", 0, 0)
+    local closeBtn = W.Button(s, "返 回 大 厅", "default")
+    closeBtn:SetPoint("BOTTOM", s, "BOTTOM", 0, 0)
     closeBtn:SetScript("OnClick", function()
         if GL.Match and GL.Match.Close then GL.Match:Close() end
         GL.UI:ShowScreen("lobby")
     end)
     s._closeBtn = closeBtn
-
-    local rematchBtn = W.Button(s, "再 来 一 局", "primary")
-    rematchBtn:SetPoint("BOTTOMRIGHT", s, "BOTTOMRIGHT", 0, 0)
-    rematchBtn:SetScript("OnClick", function()
-        if GL.Match and GL.Match.Rematch then GL.Match:Rematch() end
-    end)
-    s._rematchBtn = rematchBtn
 
     ------------------------------------------------------------
     -- 渲染
@@ -135,10 +133,14 @@ local function Build(body)
                 winnerName or "—"))
         end
 
-        -- final-board（自适应列）
+        -- final-board（自适应列）。单列(n≤6)时把行宽限到 460 并水平居中——
+        -- 否则 1 个 row 会被拉到整个 board 宽（约 560），单人结算看着像"贴着左边歪一条"。
         local n = #ranking
         local cols = (n <= 6) and 1 or (n <= 12) and 2 or 3
-        local colW = (self._board:GetWidth() - (cols - 1) * 5) / cols
+        local boardW = self._board:GetWidth()
+        local colW = (boardW - (cols - 1) * 5) / cols
+        if cols == 1 then colW = math.min(colW, 460) end
+        local rowXOffset = (cols == 1) and ((boardW - colW) / 2) or 0
         for _, row in ipairs(self._finalRows) do row:Hide() end
         for i, e in ipairs(ranking) do
             local row = self._finalRows[i]
@@ -155,22 +157,17 @@ local function Build(body)
             local col = (i - 1) % cols
             local rowN = math.floor((i - 1) / cols)
             row:ClearAllPoints()
-            row:SetPoint("TOPLEFT", self._board, "TOPLEFT", col * (colW + 5), -rowN * 38)
+            row:SetPoint("TOPLEFT", self._board, "TOPLEFT",
+                rowXOffset + col * (colW + 5), -rowN * 38)
             row:SetRow({ rank = i, name = label, classFile = classFile,
                          score = e.score or 0, cps = e.cps or ((e.score or 0) / duration), isSelf = isSelf })
         end
-
-        -- 团长才显示再来一局
-        local leader = false
-        if GL.Roster and GL.Roster.IsLeader then
-            local ok, r = pcall(function() return GL.Roster:IsLeader() end)
-            if ok then leader = r end
-        end
-        self._rematchBtn:SetShown(leader)
     end
 
+    -- _onShow 优先用缓存的本场结果（从日志重开本窗口时，Match 已 Close → GetContext 是 IDLE 没排名）；
+    -- 正常 MATCH_FINAL 也会先缓存再切屏，两路一致。
     function s._onShow()
-        local ctx = GL.Match and GL.Match.GetContext and GL.Match:GetContext()
+        local ctx = GL.UI._lastResult or (GL.Match and GL.Match.GetContext and GL.Match:GetContext())
         s:Render(ctx)
     end
 
@@ -178,6 +175,18 @@ local function Build(body)
         s:Render(ctx)
         GL.UI:Show()
         GL.UI:ShowScreen("results")
+        -- 缓存本场结果（Match:Close 用 newIdleCtx 换表，旧子表不被 wipe，引用安全）。
+        GL.UI._lastResult = {
+            ranking = ctx.ranking, winner = ctx.winner, prize = ctx.prize,
+            players = ctx.players, duration = ctx.duration, gameId = ctx.gameId,
+        }
+        -- 写一条可点击的结果日志：回大厅后可见，点击重开本结算窗口看排名。
+        local rk = ctx.ranking and ctx.ranking[1]
+        local wname = ctx.winner or (rk and rk.name) or "—"
+        local wscore = rk and rk.score or 0
+        GL.UI:Log("raid", string.format("本场结果：%s 夺冠（%d）· 点击查看排名", wname, wscore), function()
+            GL.UI:Show(); GL.UI:ShowScreen("results")
+        end)
     end)
 
     return s

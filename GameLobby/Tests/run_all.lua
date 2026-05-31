@@ -47,7 +47,19 @@ local loadOrder = {
     "Core/Match.lua",
     "Core/UI/Theme.lua",
     "Core/UI/Frame.lua",
-    "Core/UI/Widgets.lua",
+    -- Widgets 子系统：Primitives 必须先（其他组件依赖它），其余无内部依赖。
+    "Core/UI/Widgets/Primitives.lua",
+    "Core/UI/Widgets/SectionLabel.lua",
+    "Core/UI/Widgets/Button.lua",
+    "Core/UI/Widgets/SmashButton.lua",
+    "Core/UI/Widgets/PlayerCard.lua",
+    "Core/UI/Widgets/LootCard.lua",
+    "Core/UI/Widgets/GameTile.lua",
+    "Core/UI/Widgets/Castbar.lua",
+    "Core/UI/Widgets/RankRow.lua",
+    "Core/UI/Widgets/StatCard.lua",
+    "Core/UI/Widgets/LogStrip.lua",
+    "Core/UI/Widgets/ScrollList.lua",
     "Core/UI/Lobby.lua",
     "Core/UI/Playing.lua",
     "Core/UI/Results.lua",
@@ -57,6 +69,8 @@ local loadOrder = {
     "Core/UI/ExportPanel.lua",
     "Core/UI/Popups.lua",
     "Core/GameImport.lua",
+    "Core/Push.lua",
+    "Core/ShareBundle.lua",
     "Games/SpeedClick.lua",
     "Core/Init.lua",
 }
@@ -106,6 +120,39 @@ end)
 step("日志条 Log", function() GL.UI:Log("sys", "测试日志"); GL.UI:Log("warn", "警告") end)
 step("导入面板 ShowImport/Hide", function() GL.UI:ShowImport(); GL.UI:HideImport() end)
 step("导出面板 ShowExport/Hide", function() GL.UI:ShowExport("测试", "!GL:1!abcdef"); if GL.UI.HideExport then GL.UI:HideExport() end end)
+step("分享整包 GetShareBundle + ShowShare（占位态）", function()
+    local b = GL:GetShareBundle()
+    assert(type(b) == "table" and b.ready == false, "占位串 ready 应为 false")
+    GL.UI:ShowShare()
+    if GL.UI.HideExport then GL.UI:HideExport() end
+end)
+
+-- ============ 4b) PlayerCard 右键推送菜单 ============
+print("== 4b) PlayerCard 右键推送菜单 ==")
+local W = GL.UI and GL.UI.Widgets
+step("BuildPlayerPushMenu(他人) 含「推送：极速按键」", function()
+    assert(W and W.BuildPlayerPushMenu, "BuildPlayerPushMenu 未暴露")
+    local menu = W.BuildPlayerPushMenu("Healer", "Healer-测试服", false)
+    assert(type(menu) == "table" and #menu >= 2, "菜单结构异常")
+    assert(menu[1].isTitle, "首项应为标题")
+    local hasPush = false
+    for _, item in ipairs(menu) do
+        if type(item.text) == "string" and item.text:match("^推送：") then hasPush = true end
+    end
+    assert(hasPush, "他人卡应至少有一条「推送：」项（speedclick 已注册且可导出）")
+end)
+step("BuildPlayerPushMenu(自己) 不含推送项", function()
+    local menu = W.BuildPlayerPushMenu("Tester", "Tester-测试服", true)
+    for _, item in ipairs(menu) do
+        assert(not (type(item.text) == "string" and item.text:match("^推送：")),
+            "自己的卡不应出现推送项")
+    end
+end)
+step("PlayerCard 实例 SetData + ShowContextMenu 不抛错", function()
+    local card = W.PlayerCard(GL.UI._frame or UIParent)
+    card:SetData({ name = "Healer", classFile = "PRIEST", pushTarget = "Healer-测试服", isSelf = false })
+    card:ShowContextMenu()
+end)
 
 -- ============ 5) Stats 战绩（直接喂 MATCH_FINAL）============
 print("== 5) Stats ==")

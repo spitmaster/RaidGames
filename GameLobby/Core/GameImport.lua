@@ -322,6 +322,20 @@ local function RunPayload(payload)
 end
 
 ------------------------------------------------------------
+-- 公开：RunPayload(payload) —— 执行单个已解析载荷（信任门已在别处过）
+------------------------------------------------------------
+-- 复用入口（契约 §6 P2P / D17）：P2P 推送在 PushOffer 阶段就已过信任门，分片重组得到
+-- !GL: 串、ParseWA 解析出 payload 后，直接调本函数 loadstring+RegisterGame，**不再二次确认**。
+-- 与 ImportGame 内部走的是同一个 RunPayload（不重造轮子，不变量复用）。
+-- 返回 ok(bool), msg(string)。版本门控（低于已装版本忽略，不降级）由 RegisterGame 兜。
+function Import:RunPayload(payload)
+    if type(payload) ~= "table" then
+        return false, "载荷格式异常"
+    end
+    return RunPayload(payload)
+end
+
+------------------------------------------------------------
 -- 公开：ImportGame(str) —— 完整导入流程（信任门 → 执行 → 注册）
 ------------------------------------------------------------
 -- onDone(ok, msg) 可选回调：导入有「确认 → 异步执行」的人机交互，故结果经回调返回。

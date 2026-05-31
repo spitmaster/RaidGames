@@ -228,7 +228,9 @@ local function Build(body)
         s._endTime = GetTime() + s._duration
         s._playing = true
         s._smash:SetActive(true)
-        s._smash:SetPressedLabel(false)
+        s._smash:SetPressedLabel(false)   -- 还原"点击"（上一局可能停在"时间到"）
+        -- 还原 castbar 左标签（上一局 PLAY_END 改成了"结算中…"，再来一局要复位）
+        s._castbar:SetLabel((ctx and ctx.gameId == "speedclick") and "极 速 按 键" or "比 赛 进 行")
         if s._overlay then s._overlay:Hide() end
         s:RenderPrize(ctx)
         s:RenderBoard(ctx)
@@ -236,7 +238,11 @@ local function Build(body)
     GL:On("MATCH_PLAY_END", function(ctx)
         s._playing = false
         s._smash:SetActive(false)
+        -- 读秒归零后到结算屏之间有个收分窗口（单人 ~0.4s / 组队 ~3s）。给出明确过渡提示，
+        -- 否则玩家看到时间到、按钮变灰却没反馈，会以为卡死了。
+        s._smash:SetCenterLabel("时间到")
         s._castbar:SetProgress(0, 0)
+        s._castbar:SetLabel("时间到 · 结算中…")
         s:RenderBoard(ctx)
     end)
     GL:On("LIVE_SCORE", function(nameNorm, score)

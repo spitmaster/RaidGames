@@ -28,10 +28,25 @@ Core\GameRegistry.lua
 Core\Stats.lua
 Core\Match.lua
 
-# --- UI（theme 先，frame 次，screens/widgets/popups 后）---
+# --- UI（theme 先，frame 次，widgets 子系统按依赖顺序，最后是 screens/popups）---
 Core\UI\Theme.lua
 Core\UI\Frame.lua
-Core\UI\Widgets.lua
+
+# Widgets 子系统：Primitives 必须先加载（其他 11 个组件都依赖它的 Solid/Ring/MetalBorder/SetFont/Text/Icons）；
+# 其余组件互不依赖，按字母排序加载即可。每文件单一职责（SRP），新增组件加新文件不动既有（OCP）。
+Core\UI\Widgets\Primitives.lua
+Core\UI\Widgets\SectionLabel.lua
+Core\UI\Widgets\Button.lua
+Core\UI\Widgets\SmashButton.lua
+Core\UI\Widgets\PlayerCard.lua
+Core\UI\Widgets\LootCard.lua
+Core\UI\Widgets\GameTile.lua
+Core\UI\Widgets\Castbar.lua
+Core\UI\Widgets\RankRow.lua
+Core\UI\Widgets\StatCard.lua
+Core\UI\Widgets\LogStrip.lua
+Core\UI\Widgets\ScrollList.lua
+
 Core\UI\Lobby.lua
 Core\UI\Playing.lua
 Core\UI\Results.lua
@@ -43,6 +58,12 @@ Core\UI\Popups.lua
 
 # --- 导入/导出（Phase 2）---
 Core\GameImport.lua
+
+# --- 点对点游戏推送（P2P 分片传输，D17）---
+Core\Push.lua
+
+# --- 分享：内置整包 WA 串（左上「分享」按钮的数据源）---
+Core\ShareBundle.lua
 
 # --- 游戏（最后；RegisterGame 时核心已就绪）---
 Games\SpeedClick.lua

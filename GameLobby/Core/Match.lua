@@ -120,29 +120,29 @@ local function buildApi(ctx)
     local meNorm = GL.Roster and GL.Roster:Me() or "self"
     local api = {}
 
-    -- 累加本端分数 → 攒分，节流后 Emit LIVE_SCORE + 广播（契约 §6）。
+    -- 累加本端分数 → 本地 Emit LIVE_SCORE（每次都触发，UI 即刻刷）；跨端广播节流（契约 §3）。
+    -- 之前把本地 emit 也并入节流，导致用户看见自己屏幕上的数字被锁在 0.4s 一跳——这是 UI bug，
+    -- 节流的本意只是「别用 Live 通讯刷屏」，本地反馈不该被波及。
     function api:AddScore(delta)
         delta = tonumber(delta) or 0
         if ctx.phase ~= PHASE.PLAYING then return end          -- 窗口外不计
         if ctx.players[meNorm] and ctx.players[meNorm].spectator then return end
         local cur = (ctx.scores[meNorm] or 0) + delta
         ctx.scores[meNorm] = cur
+        -- 本地：每次点击都 Emit，让自己屏的计数/进度条实时响应。
+        emit("LIVE_SCORE", meNorm, cur)
+        -- 跨端：≥LIVE_THROTTLE 一条，且分数变化才发；未到点的累积留给 _EndPlay 尾包补发。
         Match._liveAccum = true
-        -- 节流：到间隔才真正广播/Emit（别每次点击都发，≥LIVE_THROTTLE 一条，契约 §3）。
         local now = GetTime()
         if now - Match._liveLast >= LIVE_THROTTLE then
             Match._liveLast = now
             Match._liveAccum = false
-            -- 真·跨端实时（SPEC 功能4 / §4.5）：广播 Live 让各端 live-board 同步刷新。
-            -- 去重：本端上一次已广播的分数若未变化则不重发（避免空转刷屏）。
             if cur ~= Match._liveSent then
                 Match._liveSent = cur
                 if GL.Comm and inGroup() then
                     GL.Comm:Broadcast("Live", ctx.matchId, meNorm, cur)
                 end
             end
-            -- 本地也 Emit 刷自己的屏（不依赖回环）。
-            emit("LIVE_SCORE", meNorm, cur)
         end
     end
 
@@ -420,10 +420,13 @@ function Match:_EndPlay()
     end
 
     -- 进入收集：host 留 COLLECT_WINDOW 秒收 Result 后算排名；参与端只等 Final。
+    -- 单人（不在队伍）时没有别人会上报分数，无需死等 3 秒——缩成 0.4s 让"时间到 → 结算"快速过渡，
+    -- 否则玩家看到读秒归零后会卡 3 秒不知道在干嘛。
     setPhase(PHASE.COLLECTING)
     if ctx.isHost then
         local mytick = bumpTick()
-        After(COLLECT_WINDOW, function()
+        local wait = inGroup() and COLLECT_WINDOW or 0.4
+        After(wait, function()
             if Match._tick ~= mytick then return end
             Match:_Tally()
         end)

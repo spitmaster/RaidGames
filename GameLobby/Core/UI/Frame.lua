@@ -13,9 +13,10 @@ local theme = GL.UI.theme
 -- 注意：.toc 中 Widgets.lua 在 Frame.lua 之后加载（契约 §10），
 -- 因此不能在文件加载期捕获 GL.UI.Widgets（那时还是 nil）。在 BuildFrame 内部惰性取。
 
--- 窗体尺寸（设计 1040px 偏大，WoW 端缩到 760 保留布局结构与视觉语言，§4.10）
-local FRAME_W = 760
-local FRAME_H = 560
+-- 窗体尺寸：原 760×560 装不下设计稿内容（LootCard+10 人 2 行+6 游戏 2 行+操作+日志 ≈ 600px）。
+-- 提到 880×700 才能让 5 列布局舒展开（参赛者 5 列 / 游戏 tile 5 列 / 设计稿同款），含 10px 缓冲。
+local FRAME_W = 880
+local FRAME_H = 700
 local TITLE_H = 56
 
 GL.UI._screens = GL.UI._screens or {}   -- name → 屏幕容器 frame
@@ -51,13 +52,11 @@ local function BuildFrame()
     f:SetClampedToScreen(true)
     f:Hide()
 
-    -- 页面底色（径向暗色感：panel 底 + 中心稍亮）
+    -- 页面底色：纯 panel 底。
+    -- 设计稿是整屏 radial-gradient（中心稍亮），WoW 端没有真·径向渐变背景；
+    -- 之前用 gradientCircle 圆纹理在矩形窗体里铺，渲染成一个居中的椭圆光斑（"莫名其妙的椭圆"），
+    -- 既不像渐变也碍眼，干脆去掉，纯底色更干净。
     W.PanelBG(f, "panel")
-    local centerGlow = f:CreateTexture(nil, "BACKGROUND", nil, 0)
-    centerGlow:SetTexture("Interface\\GLUES\\MODELS\\UI_Tauren\\gradientCircle")
-    centerGlow:SetVertexColor(theme:RGB("bgPage2", 0.5))
-    centerGlow:SetSize(FRAME_W * 0.8, FRAME_H * 0.6)
-    centerGlow:SetPoint("CENTER", f, "CENTER", 0, 60)
 
     -- 金属多层描边（四角装饰已去除）
     W.MetalBorder(f, "frame")
@@ -111,6 +110,69 @@ local function BuildFrame()
     badgeText:SetText("团员")
     f._badge = badge
     f._badgeText = badgeText
+
+    -- 左上「分享游戏」按钮（贴徽章右侧）：插件↔插件传播小游戏（D19）。
+    -- 点击弹出可分享游戏列表 → 选一个 → 导出 !GL: 串供 Ctrl+C 发给朋友（对方大厅「导入游戏」框粘入）。
+    -- 即时直推走另一条：右键参赛者卡 → 推送游戏（GL.Push）。
+    local shareBtn = CreateFrame("Button", nil, title)
+    shareBtn:SetSize(78, 22)
+    shareBtn:SetPoint("LEFT", badge, "RIGHT", 8, 0)
+    W.PanelBG(shareBtn, "panel2"); W.MetalBorder(shareBtn, "thin")
+    local shareFs = W.Text(shareBtn, "display", theme.font.btnSm, "textDim")
+    shareFs:SetPoint("CENTER")
+    shareFs:SetText("|TInterface\\ChatFrame\\UI-ChatIcon-Share:0|t 分享游戏")
+    shareBtn._fs = shareFs
+    shareBtn:SetScript("OnEnter", function(s)
+        s._fs:SetTextColor(theme:RGB("accent"))
+        for _, ring in ipairs(s._borders or {}) do
+            for _, e in pairs(ring) do e:SetVertexColor(theme:RGB("accent")) end
+        end
+    end)
+    shareBtn:SetScript("OnLeave", function(s)
+        s._fs:SetTextColor(theme:RGB("textDim"))
+        for _, ring in ipairs(s._borders or {}) do
+            for _, e in pairs(ring) do e:SetVertexColor(theme:RGB("frameDark")) end
+        end
+    end)
+    shareBtn:SetScript("OnClick", function(s)
+        if not (GL.Games and GL.Games.List and EasyMenu) then
+            if GL.UI.Log then GL.UI:Log("warn", "游戏列表尚未就绪") end
+            return
+        end
+        local menu = { { text = "分享游戏字符串", isTitle = true, notCheckable = true } }
+        local any = false
+        local ok, list = pcall(function() return GL.Games:List() end)
+        for _, def in ipairs((ok and list) or {}) do
+            if not def.locked and type(def.code) == "string" and def.code ~= "" then
+                any = true
+                local id, name = def.id, def.name or def.id
+                menu[#menu + 1] = {
+                    text = name, notCheckable = true,
+                    func = function()
+                        if not (GL.Import and GL.Import.ExportGame) then
+                            if GL.UI.Log then GL.UI:Log("warn", "导出模块未就绪") end
+                            return
+                        end
+                        local str, why = GL.Import:ExportGame(id)
+                        if type(str) == "string" then
+                            GL.UI:ShowExport("分享：" .. name, str)
+                        elseif GL.UI.Log then
+                            GL.UI:Log("warn", why or "导出失败")
+                        end
+                    end,
+                }
+            end
+        end
+        if not any then
+            menu[#menu + 1] = { text = "（暂无可分享的游戏）", notCheckable = true, disabled = true }
+        end
+        menu[#menu + 1] = { text = "取消", notCheckable = true, func = function() end }
+        if not GL.UI._shareDropdown then
+            GL.UI._shareDropdown = CreateFrame("Frame", "GameLobbyShareDropdown", UIParent, "UIDropDownMenuTemplate")
+        end
+        EasyMenu(menu, GL.UI._shareDropdown, s, 0, 0, "MENU")
+    end)
+    f._shareBtn = shareBtn
 
     ----------------------------------------------------------------
     -- 标题栏右上按钮：[战史][关于][✕]
@@ -257,21 +319,97 @@ function GL.UI:RefreshBadge()
 end
 
 ------------------------------------------------------------
--- slash 命令（/gl /gamelobby /游戏大厅）
+-- 屏幕图标启动器（仅 WA 版）—— 沙箱注册不进真实 /命令（核心活在 WeakAuras 沙箱、
+-- 外面够不着 SlashCmdList），故 isWA 时不注册 slash，改在屏幕上挂一个可点、可拖的小图标，
+-- OnClick → GL.UI:Toggle()。图标须加载后即可见（不依赖 /gl）。
+-- 遵守项目 UI 规则：矩形元素禁用 GlowHalo（椭圆光斑），边光一律 W.Ring 描边（hover 用边色变化）。
+------------------------------------------------------------
+
+local function BuildLauncherIcon()
+    if GL.UI._launcher then return GL.UI._launcher end
+    local W = GL.UI.Widgets
+    if not W then return nil end   -- Widgets 未就绪（极端加载顺序）：放弃，由后续重试
+
+    local ICON_SZ = 36
+    local btn = CreateFrame("Button", "GameLobbyLauncher", UIParent)
+    btn:SetSize(ICON_SZ, ICON_SZ)
+    -- 默认位置：屏幕右侧中部（可拖动，会话内位置不持久——WA 无 SavedVariables，降级可接受）。
+    btn:SetPoint("RIGHT", UIParent, "RIGHT", -8, 0)
+    btn:SetFrameStrata("MEDIUM")
+    btn:SetToplevel(true)
+    btn:EnableMouse(true)
+    btn:SetMovable(true)
+    btn:RegisterForDrag("LeftButton")
+    btn:RegisterForClicks("LeftButtonUp")
+    btn:SetClampedToScreen(true)
+
+    -- 铁木风底 + thin 金属描边（矩形，遵守"禁 GlowHalo、边光用 Ring"规则）。
+    W.PanelBG(btn, "panel2")
+    W.MetalBorder(btn, "thin")
+
+    -- 中心 glyph（用核心闪电图标，与极速按键同源视觉；纯 Texture，非 GlowHalo）。
+    local icon = btn:CreateTexture(nil, "ARTWORK")
+    icon:SetTexture("Interface\\Icons\\Spell_Nature_Lightning")
+    icon:SetPoint("CENTER")
+    icon:SetSize(ICON_SZ - 10, ICON_SZ - 10)
+    btn._icon = icon
+
+    -- hover：边色转 accent（Ring 描边变色，不用任何径向光团）。
+    local function setBorder(token)
+        for _, ring in ipairs(btn._borders or {}) do
+            for _, e in pairs(ring) do e:SetVertexColor(theme:RGB(token)) end
+        end
+    end
+    btn:SetScript("OnEnter", function(s)
+        setBorder("accent")
+        GameTooltip:SetOwner(s, "ANCHOR_LEFT")
+        GameTooltip:AddLine("游戏大厅")
+        GameTooltip:AddLine("|cff808080点击开关  ·  拖动移动|r", 1, 1, 1)
+        GameTooltip:Show()
+    end)
+    btn:SetScript("OnLeave", function()
+        setBorder("frameDark")
+        GameTooltip:Hide()
+    end)
+
+    -- 拖动：拖完不算点击（用移动标记区分，避免拖动后误 Toggle）。
+    btn:SetScript("OnDragStart", function(s) s._moving = true; s:StartMoving() end)
+    btn:SetScript("OnDragStop", function(s) s:StopMovingOrSizing(); s._moving = false end)
+    btn:SetScript("OnClick", function(s)
+        if s._moving then return end
+        GL.UI:Toggle()
+    end)
+
+    btn:Show()
+    GL.UI._launcher = btn
+    GL:_RegisterFrame(btn)   -- 热升级让位时被 Hide（与主窗体一致）
+    return btn
+end
+
+------------------------------------------------------------
+-- slash 命令（/gl /gamelobby /游戏大厅）—— 仅插件版。
+-- isWA（沙箱）时跳过 slash 注册：沙箱里写 SlashCmdList 无效（外部够不着），
+-- 还可能在 flush 期引发报错；改用屏幕图标启动器（见上）。
 ------------------------------------------------------------
 
 GL:Init(function()
-    SLASH_GAMELOBBY1 = "/gl"
-    SLASH_GAMELOBBY2 = "/gamelobby"
-    SLASH_GAMELOBBY3 = "/游戏大厅"
-    SlashCmdList["GAMELOBBY"] = function(msg)
-        msg = (msg or ""):lower():gsub("%s", "")
-        if msg == "history" or msg == "战史" then
-            GL.UI:Show(); GL.UI:ShowScreen("history")
-        elseif msg == "about" or msg == "关于" then
-            GL.UI:Show(); GL.UI:ShowScreen("about")
-        else
-            GL.UI:Toggle()
+    if GL.isWA then
+        -- WA 版：建屏幕图标启动器替代 /gl。
+        BuildLauncherIcon()
+    else
+        -- 插件版：照旧注册 slash（行为不回归，不建图标）。
+        SLASH_GAMELOBBY1 = "/gl"
+        SLASH_GAMELOBBY2 = "/gamelobby"
+        SLASH_GAMELOBBY3 = "/游戏大厅"
+        SlashCmdList["GAMELOBBY"] = function(msg)
+            msg = (msg or ""):lower():gsub("%s", "")
+            if msg == "history" or msg == "战史" then
+                GL.UI:Show(); GL.UI:ShowScreen("history")
+            elseif msg == "about" or msg == "关于" then
+                GL.UI:Show(); GL.UI:ShowScreen("about")
+            else
+                GL.UI:Toggle()
+            end
         end
     end
 

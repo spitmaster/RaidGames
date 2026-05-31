@@ -80,7 +80,10 @@ local function BuildExportPanel()
     hint:SetPoint("TOPLEFT", titleBar, "BOTTOMLEFT", 16, -12)
     hint:SetPoint("RIGHT", p, "RIGHT", -16, 0)
     hint:SetJustifyH("LEFT")
+    hint:SetJustifyV("TOP")
+    hint:SetWordWrap(true)
     hint:SetText("Ctrl+C 复制，发给朋友粘进他的大厅导入框。")
+    p._hint = hint   -- 暴露说明文字，供 ShowExport / ShowShare 改写
 
     -- 只读输入框（多行、凹槽底，已全选便于复制）
     local box = W.Inset(p)
@@ -127,19 +130,47 @@ end
 ------------------------------------------------------------
 
 -- 只读可复制弹框，展示导出的字符串（自动全选便于 Ctrl+C）。
--- title: 弹框标题（如 "导出：极速按键"）；str: 导出字符串。
-function GL.UI:ShowExport(title, str)
+-- title: 弹框标题（如 "导出：极速按键"）；str: 导出字符串；hint: 可选，复制说明文案。
+function GL.UI:ShowExport(title, str, hint)
     self:Show()                 -- 确保主窗体已建（弹框挂其上）
     local p = BuildExportPanel()
     str = tostring(str or "")
     p._str = str
     if title and title ~= "" then p._title:SetText(title) end
+    if p._hint then
+        p._hint:SetText(hint and hint ~= "" and hint
+            or "Ctrl+C 复制，发给朋友粘进他的大厅导入框。")
+    end
     p._dim:Show()
     p:Show()
     p._edit:SetText(str)
     p._edit:SetCursorPosition(0)
     p._edit:SetFocus()          -- AutoFocus 已关，这里手动取焦点便于立即 Ctrl+C
     p._edit:HighlightText()     -- 全选
+end
+
+------------------------------------------------------------
+-- GL.UI:ShowShare() —— 分享整个插件（核心 + 游戏）的 WA 整包串
+------------------------------------------------------------
+-- 数据来自 GL:GetShareBundle()（内置常量，见 Core/ShareBundle.lua）。
+--   - 已内置真串：弹框给串 + WA 导入指引（给没装插件的新人，粘进 WeakAuras 自带导入框）。
+--   - 仍是占位（未生成）：弹框诚实说明「尚未内置」+ 怎么生成，绝不发出假串。
+function GL.UI:ShowShare()
+    local b = (GL.GetShareBundle and GL:GetShareBundle()) or { ready = false, str = "", version = GL.version }
+    local title = "分  享  插  件"
+    if b.ready and b.str ~= "" then
+        self:ShowExport(title, b.str,
+            "整包分享串（核心 + 游戏 v" .. tostring(b.version) .. "）。\n"
+            .. "Ctrl+C 复制，发给没装插件的朋友：让他粘进 WeakAuras 自带的「导入」框，导入后即玩，无需手动装插件。")
+    else
+        -- 占位态：把说明放进只读框，按钮仍可用且自解释（而不是发一段坏串）。
+        self:ShowExport(title,
+            "（整包分享串尚未内置）\n\n"
+            .. "整包「一串即玩」的 WeakAuras 串需在游戏内用 WeakAuras 自带导出生成一次，\n"
+            .. "再随插件内置。生成流程见 dist/README.md「B 档·全家桶」。\n\n"
+            .. "若对方已装「游戏大厅」核心，只想要游戏，可改用大厅里每个游戏格右键「导出字符串」分享。",
+            "此为占位说明，非可用字符串。请按 dist/README.md 生成整包串后内置到 Core/ShareBundle.lua。")
+    end
 end
 
 function GL.UI:HideExport()

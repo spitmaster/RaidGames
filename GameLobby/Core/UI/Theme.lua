@@ -98,13 +98,29 @@ local FONT = {
     tiny        = 10,
 }
 
--- WoW 自带字体路径（中文衬线感 → ARKai；数字等宽感 → ARIALN 近似 tabular-nums）
+-- WoW 自带字体路径（中文客户端通用，与 sample/BiaoGe 一致）：
+--   ARKai_T.ttf —— 中文楷体（标题/正文衬线气质，贴近 Cinzel）
+--   ARHei.ttf   —— 中文黑体（紧凑，用作 mono 替代 ARIALN）
+-- 之所以不用 ARIALN.TTF：它只含 ASCII，遇到「X 人 / 人激战 / 留空则为友谊赛 / [系统][战团][警告]」
+-- 这种中文混排会渲染成方块 □。ARHei 既含中文又较紧凑，能保住与 ui/display 楷体的视觉差。
 local FONTFILE = {
-    display = "Fonts\\ARKai_T.ttf",   -- 标题/按钮：中文楷体，贴近 Cinzel 衬线气质
-    ui      = "Fonts\\ARKai_T.ttf",   -- 正文
-    mono    = "Fonts\\ARIALN.TTF",    -- 数字/计时/分数（较窄，近似等宽）
+    display = "Fonts\\ARKai_T.ttf",
+    ui      = "Fonts\\ARKai_T.ttf",
+    mono    = "Fonts\\ARHei.ttf",
 }
-if not FONTFILE.display then FONTFILE.display = STANDARD_TEXT_FONT end
+-- 兜底：少数客户端可能缺某个 TTF，回落到 STANDARD_TEXT_FONT（locale 默认）保证仍能渲染。
+-- WoW Lua 没有可靠的字体存在性 API，这里用 FontString 渲染探测：SetFont 后看 GetFont 是否非空。
+do
+    local probe = UIParent and UIParent:CreateFontString(nil, "ARTWORK")
+    local fallback = STANDARD_TEXT_FONT or "Fonts\\ARKai_T.ttf"
+    if probe then
+        for kind, path in pairs(FONTFILE) do
+            probe:SetFont(path, 12, "")
+            if not probe:GetFont() then FONTFILE[kind] = fallback end
+        end
+        probe:Hide()
+    end
+end
 
 ------------------------------------------------------------
 -- 组装 theme，挂 GL.UI.theme
