@@ -245,6 +245,9 @@ _G.wipe = function(t) for k in pairs(t) do t[k] = nil end return t end
 _G.strsplittable = function(sep, str) return { strsplit(sep, str) } end
 _G.strlenutf8 = function(s) local _, c = s:gsub("[^\128-\191]", ""); return c end
 _G.max = math.max; _G.min = math.min; _G.abs = math.abs; _G.floor = math.floor; _G.ceil = math.ceil
+-- ⚠️ WoW 沙箱没有 math.randomseed（时光服实测 nil）。这里同样抹掉，让「游戏调 randomseed」
+-- 这类只在真机崩的 bug 在无头就暴露。游戏要确定性随机应改用框架的 api:Random（见 game-dev-spec §4）。
+math.randomseed = nil
 _G.securecall = function(f, ...) return f(...) end
 _G.hooksecurefunc = function(tbl, name, fn)
     if type(tbl) == "string" then fn = name; name = tbl; tbl = _G end

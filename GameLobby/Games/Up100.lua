@@ -69,8 +69,7 @@ return {
         -- worldY：以「世界坐标」记平台高度（越大越高）；平台沿世界系固定，靠 G.camY 投影到画布。
         -- 每层平台的水平位置 px 随机（留出左右边距），相当于「缺口/落脚点」位置变化。
         -- 约束：相邻两层 px 偏移 ≤ reachX，保证一次弹跳的滞空时间内左右移动够得着下一层（关卡总是可通）。
-        local seed = api:GetSeed()
-        math.randomseed(seed)
+        -- ⚠️ WoW 沙箱无 math.randomseed；用框架确定性随机 api:Random（各端 matchId+round 一致）。
         G.platforms = {}            -- { worldY=, px=, tier=, tex= }
         local layers = 200          -- 预生成足量层（30s 一般爬不满）
         local minPx, maxPx = 8, W - G.pltW - 8
@@ -80,7 +79,7 @@ return {
         for i = 1, layers do
             local lo = math.max(minPx, prevPx - reachX)
             local hi = math.min(maxPx, prevPx + reachX)
-            local px = (i == 1) and prevPx or math.random(math.floor(lo), math.floor(hi))
+            local px = (i == 1) and prevPx or api:Random(math.floor(lo), math.floor(hi))
             G.platforms[i] = { worldY = i * G.gapY, px = px, tier = i }
             prevPx = px
         end

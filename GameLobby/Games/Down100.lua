@@ -9,7 +9,7 @@
 --
 -- 不变量 #1（同体）：首行 aura_env；本游戏独立版本门控（热升级靠 version）。
 -- 不变量 #2（解耦）：只走 api（SetScore/Canvas/CaptureKeyboard/GetSeed/IsSpectator），绝不发通讯。
--- 公平（§4）：setup 里 math.randomseed(api:GetSeed()) 一次性生成关卡序列，各端布局一致。
+-- 公平（§4）：setup 里用 api:Random()（框架确定性随机；WoW 无 math.randomseed）生成关卡序列，各端布局一致。
 --
 -- 【分享/自包含（§6）】：游戏本体写成自包含源码字符串 SOURCE，loadstring 出 def，def.code = SOURCE。
 --   SOURCE 内代码只能用 ctx/api 形参 + 全局（GetTime/math/CreateFrame/_G.GameLobby）+ 自己的 local，
@@ -69,11 +69,10 @@ return {
         -- ===== 关卡序列（种子驱动，各端一致）=====
         -- 每行只需记一个缺口左边缘 x（缺口范围 [gapX, gapX+GAP_W]）。
         -- 用一个确定性的 next() 闭包按需取下一行缺口，避免预生成无限数组。
-        math.randomseed(api:GetSeed())
         local maxGapX = W - GAP_W
         if maxGapX < 0 then maxGapX = 0 end
         G.nextGapX = function()
-            return math.random(0, maxGapX)   -- 种子固定 → 各端 random 序列相同 → 缺口一致
+            return api:Random(0, maxGapX)    -- 框架确定性随机（各端一致）；WoW 无 math.randomseed
         end
 
         -- ===== 平台对象池（复用 Texture，OnUpdate 只改位置/显隐）=====

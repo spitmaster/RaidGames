@@ -113,18 +113,22 @@ return {
 
 刷分档无所谓，但**自绘/随机关卡的游戏**（下 100 层的平台布局）如果每个客户端各自随机，「谁下得最深」就没有可比性。
 
-规则：声明 `seeded = true`，用 `api:GetSeed()` 取**全场统一种子**生成关卡：
+规则：声明 `seeded = true`，用 **`api:Random()`**（框架确定性随机）生成关卡：
 
 ```lua
 function def.setup(ctx, api)
-    local seed = api:GetSeed()          -- 全场一致
-    math.randomseed(seed)               -- 之后 math.random() 序列各端相同 → 关卡相同
-    -- ...用 random 一次性生成平台/缺口布局，存进自己的表...
+    -- ⚠️ 别用 math.randomseed —— WoW 沙箱里它是 nil，真机直接报错！
+    -- 用框架的 api:Random（已自带种子，各端一致）。用法同 math.random：
+    --   api:Random()     → [0,1) 浮点
+    --   api:Random(n)    → [1,n] 整数
+    --   api:Random(m,n)  → [m,n] 整数
+    local gapX = api:Random(0, maxGapX)   -- 各端序列相同 → 关卡布局一致
+    -- ...用 api:Random 一次性生成平台/缺口布局，存进自己的表...
 end
 ```
 
-> **种子怎么来的**（已实现）：`api:GetSeed()` 从 `matchId`（+ 加赛 `round`）**确定性派生**一个数字。`matchId` 经 `Start` 广播各端一致、`round` 经 `Tie`/`Begin` 同步，所以各端 `GetSeed()` 结果天然相同——**不新增协议字段**（守住协议字节级一致，不变量 #4）。同一局每次调返回同一值；加赛换 round → 新布局。
-> 注意：`math.randomseed` 是全局状态，**在 `setup` 里一次性把关卡数据生成完存进自己的表**，别在 OnUpdate 循环里反复 reseed（会和别的代码抢全局 RNG）。
+> **种子怎么来的**（已实现）：`api:Random()` 内部种子取自 `api:GetSeed()`，后者从 `matchId`（+ 加赛 `round`）**确定性派生**。`matchId` 经 `Start` 广播各端一致、`round` 经 `Tie`/`Begin` 同步，所以各端 `api:Random()` 数列天然相同——**不新增协议字段**（守住协议字节级一致，不变量 #4）。
+> **铁律**：①**绝不调 `math.randomseed`**（WoW 沙箱无此函数，真机崩；无头夹具也已抹掉它来复现）；②要确定性随机一律用 `api:Random`；③在 `setup` 里一次性把关卡数据生成完存进自己的表，别在 OnUpdate 里反复生成。
 
 ---
 
@@ -139,7 +143,9 @@ api:GetScore()        -- 读当前分
 api:Finish(score?)    -- 主动结束本端（elimination 必用：摔死就调）；省略 score 用已攒的
 api:Remaining()       -- 剩余秒（timed 有意义）
 api:Elapsed()         -- 已用秒（用游戏时钟 GetTime 算，别自己记）
-api:GetSeed()         -- 本场统一随机种子（seeded=true 时）
+api:GetSeed()         -- 本场统一随机种子数字（seeded=true 时；各端一致）
+api:Random(m, n)      -- 确定性随机数(各端一致)。⚠️ 别用 math.randomseed(WoW 沙箱无!)。
+                      -- 用法同 math.random：()→[0,1) / (n)→[1,n] / (m,n)→[m,n]
 api:IsSpectator()     -- 围观者只渲染、不收输入（必须判：围观者别绑输入、别计分）
 api:Log(text)         -- 往大厅日志条写一行（可选）
 ```

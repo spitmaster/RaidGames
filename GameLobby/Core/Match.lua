@@ -211,6 +211,24 @@ local function buildApi(ctx)
         return h
     end
 
+    -- 确定性随机数发生器（⚠️ WoW 沙箱没有 math.randomseed！游戏别用它）。
+    -- 自带 Park-Miller LCG，种子取自 GetSeed()，各端 matchId+round 相同 → 数列相同（公平）。
+    -- 用法同 math.random：Random()→[0,1) 浮点；Random(n)→[1,n] 整数；Random(m,n)→[m,n] 整数。
+    local rngState
+    function api:Random(m, n)
+        if not rngState then
+            rngState = self:GetSeed() % 2147483647
+            if rngState <= 0 then rngState = rngState + 2147483646 end
+        end
+        rngState = (rngState * 16807) % 2147483647
+        local r = (rngState - 1) / 2147483646          -- [0,1)
+        if m == nil then return r end
+        if n == nil then m, n = 1, m end
+        m, n = math.floor(m), math.floor(n)
+        if n < m then m, n = n, m end
+        return m + math.floor(r * (n - m + 1))
+    end
+
     -- 刷分档：返回标准比赛屏的狂点钮句柄（仅 PlayingScreen 存在时）。游戏挂输入用。
     function api:SmashButton()
         if GL.UI and GL.UI.SmashButton then return GL.UI:SmashButton() end

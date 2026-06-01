@@ -5,7 +5,7 @@
 --   该目标立即在随机位置以新随机速度重生。点中越多者胜（多者胜，desc）。
 --   - 移动用 OnUpdate 的 dt 驱动（帧率无关，spec §8）。
 --   - 命中只走 api:AddScore(1)，绝不自己发通讯（不变量 #2）。
---   - 初始位置/速度用 api:GetSeed() 派生（各端开局一致，公平，spec §4）；重生用 math.random。
+--   - 初始位置/速度用 api:Random（框架确定性随机，各端开局一致，公平，spec §4）；WoW 无 math.randomseed。
 --   - 围观者（api:IsSpectator）目标照飞可看，但点击不计分（命中回调里判空返回）。
 --
 -- 不变量 #1（同体）：首行 aura_env；本游戏独立版本门控（为 WA 热升级铺路）。
@@ -59,8 +59,7 @@ return {
         state.targets = state.targets or {}
         state.size = 40                            -- 目标直径（像素）
 
-        -- 用全场统一种子播种：各端 setup 时 random 序列一致 → 初始位置/速度相同（公平）。
-        math.randomseed(api:GetSeed())
+        -- ⚠️ WoW 沙箱无 math.randomseed；初始位置/速度用框架确定性随机 api:Random（各端开局一致，公平）。
 
         -- 画布尺寸：setup 时拿一次估值（可能尚未布局，start 里会再校正）。
         local cw = (cv.GetWidth and cv:GetWidth()) or 600
@@ -85,11 +84,11 @@ return {
             local maxY = (state.ch or ch) - sz
             if maxX < 1 then maxX = 1 end
             if maxY < 1 then maxY = 1 end
-            t.x = math.random() * maxX
-            t.y = math.random() * maxY
+            t.x = api:Random() * maxX
+            t.y = api:Random() * maxY
             -- 速度：120~260 px/s，方向随机（避免接近 0 导致几乎不动）。
-            local sp = 120 + math.random() * 140
-            local ang = math.random() * 6.2831853                 -- 0~2π
+            local sp = 120 + api:Random() * 140
+            local ang = api:Random() * 6.2831853                  -- 0~2π
             t.vx = math.cos(ang) * sp
             t.vy = math.sin(ang) * sp
             -- 防止纯水平/垂直（视觉单调）：分量太小则补一点。
