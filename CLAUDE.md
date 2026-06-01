@@ -9,9 +9,10 @@
 
 接手序列：
 1. 读 `SPEC.md` —— 完整规格（功能、UI、技术架构、通讯协议、验收标准）。
-2. 读 `requirements.md` —— 需求来源 + 决策日志（D1–D14）+ 非目标 + 待核实项。
-3. 看 `git log` / 当前分支了解代码进度。
-4. 当前状态：**需求 + UI 设计 + 架构已基本定稿，代码尚未开工**。M1 范围见 SPEC §7 与 requirements §6/§10。
+2. 读 `requirements.md` —— 需求来源 + 决策日志（D1–D19）+ 非目标 + 待核实项。**特别注意 D19：WA 整包核心路线已暂停，现走纯插件路线**。
+3. 读 `docs/M1-status.md` —— M1 进度报告（哪些验收项已完成/无头验证过/待真机）。
+4. 看 `git log` / 当前分支了解代码进度。
+5. 当前状态：**M1 全部功能代码已完成**，在无头 WoW 模拟环境端到端跑通（零运行时错），主界面真机已可打开。**剩余是只能真机/多人/真机验证的部分**（见 `docs/M1-status.md` §3）。M1 范围见 SPEC §7 与 requirements §6/§10。
 
 ## 第一步：读设计文档
 
@@ -46,8 +47,9 @@
 | `docs/` | SDD 脚手架（方法论/模板/流程） |
 | `sample/BiaoGe/` | 架构蓝本（只读参考） |
 | `sample/RaidGames-handoff/` | UI 设计稿（只读参考） |
+| `docs/M1-status.md` | M1 进度报告（已完成/无头验证/待真机清单） |
 | `.claude/agents/` | 魔兽插件开发 agent（见下） |
-| `GameLobby/`（未来） | 插件核心代码（Core/Games/UI/Libs/dist） |
+| `GameLobby/` | 插件核心代码（`Core/` 引导/通讯/状态机/UI、`Games/SpeedClick.lua`、`Libs/` 内嵌库、`Tests/` 无头测试、`dist/` 发布产物） |
 
 ## 专职 Agent（`.claude/agents/`）
 
@@ -59,11 +61,17 @@
 
 ## 测试 / 健康检查
 
-代码尚未开工。代码就绪后，健康检查应包含（待补全为可执行步骤）：
-- 插件在时光服正常加载，无 Lua 报错（`/console scriptErrors 1` 下无弹错）。
-- `/gl` 开关主面板；团长/助理可发起、团员可参与。
-- 极速按键单机计数/计时正确；团内联机排名一致。
-- 极速按键 WA 字符串导入后可玩，且与插件用户同场互通。
+**无头自动化（本机可复跑，已设为 `/deploy-addon` 发布前门禁）**：本机 Lua 5.1 跑三个无头测试，覆盖逻辑 + 集成（环境模拟见 `GameLobby/Tests/headless_env.lua`）：
+
+- `GameLobby/Tests/Match_selftest.lua` —— 状态机逻辑：排名/平局加赛/异常分/非 host 不裁决/prize 往返/战绩。
+- `GameLobby/Tests/run_all.lua` —— 加载全插件 + 引导 + slash 注册 + 五屏渲染 + host 一整局 + 导入导出面板。
+- `GameLobby/Tests/run_match.lua` —— 线路收发：参与端 Start→Join→Begin→倒计时→上报→Final 落战绩；host 并列触发 Tie 加赛。
+- 局限：模拟环境只查逻辑/nil/字段错，**不查真机视觉、真实网络**。
+
+**仅能真机验证（见 `docs/M1-status.md` §3）**：
+
+- 插件在时光服正常加载、`/gl` 开面板（已确认）；多人一整局排名一致；平局加赛；视觉细节。
+- 极速按键 **`!GL:` 自控串**（非 WA 串，D19 后）导入大厅「+导入游戏」即玩；插件×插件 P2P 推送。
 
 ## 沟通约定
 
