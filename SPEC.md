@@ -351,6 +351,8 @@ addon（宽 min(1040px, 视口-64)，多层金属描边 + 四角菱形宝石 18p
 
 ### 框架 + 可插拔游戏
 
+> ⚠️ **2026-06-01 修正（requirements.md D21）**：本节描述的 `def`（`host`/`client` + 刷分 api `SmashButton`）是 **M1 极速按键的现状**，隐含假设了「固定时间窗口 + 狂点累加分」这一**单一游戏形态**。为支持复杂游戏（如「是男人就下 100 层」实时动作类），框架将在 **M2 泛化为「通用比赛容器」**：①**分层 api**（`tier="score"` 刷分档 / `tier="canvas"` 自绘档）；②**游戏自报元数据**（`endMode`/`scoreOrder`/`scoreUnit`/`scoreCap`/`seeded`/`needsKeyboard`）使框架通用裁决；③**统一生命周期** `setup/start/stop/teardown` 取代 `client/host`，新增 `api:Canvas()`/`api:CaptureKeyboard()`/`api:GetSeed()`/`api:Finish()`。**面向游戏作者的完整契约见 [docs/game-dev-spec.md](docs/game-dev-spec.md)**（M2 目标，M1 现状以本节为准）。架构不变量（解耦/协议一致/同体）全部不变。
+
 - 核心暴露注册接口 `GameLobby:RegisterGame(def)`，`def` 至少含 `{ id, name, version, host, client, onResult }`。
 - 每个游戏（含极速按键）**同样用「同体」机制**：既能作为子插件被核心 `.toc` 加载并注册，也能作为一段 WA 字符串导入并注册（导入即注册，无需 /reload，见功能 9）。
 - **游戏与通讯解耦**：游戏只产出「分数 / 事件」，收发统一走核心 `Comm`；新增游戏不碰通讯层。

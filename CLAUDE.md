@@ -48,6 +48,7 @@
 | `sample/BiaoGe/` | 架构蓝本（只读参考） |
 | `sample/RaidGames-handoff/` | UI 设计稿（只读参考） |
 | `docs/M1-status.md` | M1 进度报告（已完成/无头验证/待真机清单） |
+| `docs/game-dev-spec.md` | 小游戏开发规范（游戏作者契约：分层 api/元数据/生命周期/分享/安全）；M2 目标（D21） |
 | `.claude/agents/` | 魔兽插件开发 agent（见下） |
 | `GameLobby/` | 插件核心代码（`Core/` 引导/通讯/状态机/UI、`Games/SpeedClick.lua`、`Libs/` 内嵌库、`Tests/` 无头测试、`dist/` 发布产物） |
 
