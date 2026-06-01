@@ -106,32 +106,3 @@ GL:RegisterGame({
     locked = true,
 })
 
-GL:RegisterGame({
-    id = "memory",
-    name = "记忆迷阵",
-    version = "0.0.0",
-    glyph = "Interface\\Icons\\Spell_Arcane_MindMastery",
-    descLines = { "记忆翻牌挑战", "敬请期待" },
-    duration = 0,
-    locked = true,
-})
-
-GL:RegisterGame({
-    id = "mathblitz",
-    name = "心算闪电战",
-    version = "0.0.0",
-    glyph = "Interface\\Icons\\Spell_Arcane_StarFire",
-    descLines = { "30 秒答题极限", "敬请期待" },
-    duration = 0,
-    locked = true,
-})
-
-GL:RegisterGame({
-    id = "wordchain",
-    name = "词牌接龙",
-    version = "0.0.0",
-    glyph = "Interface\\Icons\\INV_Misc_Book_09",
-    descLines = { "诗词文字比拼", "敬请期待" },
-    duration = 0,
-    locked = true,
-})

@@ -1,8 +1,7 @@
 -- GameLobby/Tests/down100_selftest.lua
--- 独立无头自测：注册 down100 → 单人 Start → advance 过倒计时 → 驱动几帧 OnUpdate + 按键
---   → 断言 setup/start 被调、SetScore 生效、能跑到 RESULTS、stop/teardown 被调。
+-- 独立无头自测（elimination 版）：注册 down100 → 单人 Start → 进 PLAYING →
+--   驱动帧+按键（移动）→ 触发死亡检测（坠底/出顶）→ 断言立即出局结算 → 围观者早退。
 -- 运行（仓库根）：lua GameLobby/Tests/down100_selftest.lua  ·  exit 0 = 通过。
--- 照 run_all.lua 的库桩 + 加载顺序 + 7c canvas 范例。
 
 local env = dofile("GameLobby/Tests/headless_env.lua")
 
@@ -60,117 +59,113 @@ print("== 2) 引导 flush ==")
 step("PLAYER_LOGIN flush", function() env.FireEvent("PLAYER_LOGIN", true, false) end)
 step("PLAYER_ENTERING_WORLD", function() env.FireEvent("PLAYER_ENTERING_WORLD", true, false) end)
 
-print("== 3) down100 注册（真实版本替换占位）==")
-step("down100 已注册且非 locked、version=1.0.0", function()
+print("== 3) down100 注册（elimination 真实版）==")
+step("down100 已注册、tier=canvas、endMode=elimination、有 code", function()
     local def = GL.Games:Get("down100")
     assert(def, "down100 未注册")
-    assert(def.locked ~= true, "down100 应已非占位（locked=false）")
-    assert(def.version == "1.0.0", "版本应为 1.0.0，实际: " .. tostring(def.version))
+    assert(def.locked ~= true, "应已非占位")
     assert(def.tier == "canvas", "tier 应为 canvas")
+    assert(def.endMode == "elimination", "endMode 应为 elimination，实际: " .. tostring(def.endMode))
     assert(def.code and def.code:sub(1, 6) == "return", "def.code 应为自包含 SOURCE")
 end)
-step("down100 可导出（非占位）", function()
+step("down100 可导出（!GL: 串）", function()
     local s, r = GL.Import:ExportGame("down100")
     assert(type(s) == "string" and s:sub(1, 4) == "!GL:", "导出失败: " .. tostring(r))
 end)
 
 -- ===== 单人模式 =====
-print("== 4) 单人跑一局 ==")
+print("== 4) 单人跑一局（含死亡立即结束）==")
 env.state.inGroup = false; env.state.inRaid = false; env.state.isLeader = false
 env.state.members = { { name = "Tester", classFile = "WARRIOR", online = true } }
 env.FireEvent("GROUP_ROSTER_UPDATE")
 GL.UI:Show()
 
 local ctxRef
-step("Start down100 → 进入 COUNTDOWN", function()
+step("Start down100 → COUNTDOWN", function()
     GL.Match:Start("down100", { prize = { mode = "friendly" } })
     local p = GL.Match:GetContext().phase
-    assert(p == "COUNTDOWN" or p == "PLAYING", "Start 后应进入倒计时/比赛，实际: " .. tostring(p))
+    assert(p == "COUNTDOWN" or p == "PLAYING", "实际: " .. tostring(p))
 end)
 
 step("advance 过倒计时 → PLAYING + setup/start 被调", function()
-    env.advance(5)   -- 过 3-2-1-GO 进入 PLAYING
+    env.advance(5)
     ctxRef = GL.Match:GetContext()
-    assert(ctxRef.phase == "PLAYING", "应在 PLAYING，实际: " .. tostring(ctxRef.phase))
+    assert(ctxRef.phase == "PLAYING", "应 PLAYING，实际: " .. tostring(ctxRef.phase))
     local G = ctxRef._d100
-    assert(G, "setup 未建立 ctx._d100（setup 未跑）")
-    assert(G.hero, "角色未建（setup）")
-    assert(G.plats and #G.plats > 0, "平台池未建（setup）")
-    assert(G.running == true, "start 未把 running 置 true（OnUpdate 未挂）")
-    assert(type(ctxRef.gameId) == "string" and ctxRef.gameId == "down100", "gameId 错")
+    assert(G and G.hero, "setup 未建角色")
+    assert(G.plats and #G.plats > 0, "平台池未建")
+    assert(G.running == true, "start 未挂 OnUpdate")
+    -- 至少有一块带刺平台（关卡含刺）
+    local hasSpike = false
+    for _, p in ipairs(G.plats) do if p.spiked then hasSpike = true end end
+    assert(hasSpike, "关卡应含带刺平台")
 end)
 
-step("驱动几帧 OnUpdate + 按键 → 角色应能左右移动", function()
+step("按键 → 角色左右移动", function()
     local cv = GL.Match._api:Canvas()
-    assert(cv, "拿不到 canvas")
     local G = ctxRef._d100
-    -- 记录初始 x
     local x0 = G.heroX
-    -- 按住右，跑几帧
     env.fireScript(cv, "OnKeyDown", "RIGHT")
-    for _ = 1, 5 do env.fireScript(cv, "OnUpdate", 0.05) end
+    for _ = 1, 4 do env.fireScript(cv, "OnUpdate", 0.04) end
     env.fireScript(cv, "OnKeyUp", "RIGHT")
-    assert(G.heroX > x0, "按右键后角色应向右移动，x0=" .. x0 .. " now=" .. G.heroX)
-    -- 按住左，跑几帧
-    local x1 = G.heroX
-    env.fireScript(cv, "OnKeyDown", "LEFT")
-    for _ = 1, 5 do env.fireScript(cv, "OnUpdate", 0.05) end
-    env.fireScript(cv, "OnKeyUp", "LEFT")
-    assert(G.heroX < x1, "按左键后角色应向左移动")
+    assert(G.heroX > x0, "按右键角色应右移")
 end)
 
-step("持续跑帧 → 重力 + 滚动 → depth/score 应能增长", function()
+step("对齐缺口下落 → depth+1（确定性计分）", function()
     local cv = GL.Match._api:Canvas()
     local G = ctxRef._d100
-    -- 跑足够多帧让角色穿过若干平台缺口（缺口随机，跑久了总会落入）。
-    -- 通过左右扫动增加命中缺口的机会。
-    for k = 1, 200 do
-        if k % 20 < 10 then env.fireScript(cv, "OnKeyDown", "LEFT"); env.fireScript(cv, "OnKeyUp", "RIGHT")
-        else env.fireScript(cv, "OnKeyDown", "RIGHT"); env.fireScript(cv, "OnKeyUp", "LEFT") end
-        env.fireScript(cv, "OnUpdate", 0.03)
-    end
-    -- depth 不一定每次都增长（取决于缺口），但代码不应抛错且 score 字段一致。
-    assert(type(G.depth) == "number" and G.depth >= 0, "depth 非法: " .. tostring(G.depth))
-    local sc = GL.Match._api:GetScore()
-    assert(sc == G.depth, "上报分(" .. sc .. ") 应等于 depth(" .. G.depth .. ")")
-    print("         （信息）跑 200 帧后 depth = " .. G.depth)
-end)
-
-step("直接构造缺口对齐 → SetScore 必定生效（确定性验证计分）", function()
-    -- 不依赖随机缺口：手动把角色放到某行缺口正上方、把该行放到角色脚下，跑一帧验证穿过 +1。
-    local cv = GL.Match._api:Canvas()
-    local G = ctxRef._d100
+    G.dead = false; G.rest = nil
+    G.heroY = G.H * 0.5                       -- 安全高度（远离上下死亡边界）
     local before = G.depth
     local p = G.plats[1]
-    p._passed = nil
+    p._passed = false
     p.gapX = 100
-    p.y = G.heroY + G.CHAR_SZ + 5   -- 平台顶在角色底边下方一点
-    G.heroX = p.gapX + (G.GAP_W - G.CHAR_SZ) / 2   -- 角色对齐缺口正中
-    G.vy = 200                                     -- 给个下落速度，必越过 platTop
+    p.y = G.heroY + G.CHAR_SZ + 6             -- 平台顶在脚下一点
+    G.heroX = p.gapX + (G.GAP_W - G.CHAR_SZ) / 2   -- 对齐缺口正中
+    G.vy = 160
     env.fireScript(cv, "OnUpdate", 0.05)
-    assert(G.depth == before + 1, "对齐缺口下落应使 depth+1，before=" .. before .. " after=" .. G.depth)
-    assert(GL.Match._api:GetScore() == G.depth, "SetScore 未把分推到 ctx.scores")
+    assert(G.depth == before + 1, "对齐缺口应 depth+1，before=" .. before .. " after=" .. G.depth)
+    assert(GL.Match._api:GetScore() == G.depth, "SetScore 未推到 ctx.scores")
 end)
 
-step("时间到 → stop 被调 + 收尾到 RESULTS/IDLE", function()
-    env.advance(35)   -- 跑完 30s + 收集窗口
+step("坠出底部 → 死亡检测触发 → 立即出局结算", function()
+    local cv = GL.Match._api:Canvas()
     local G = ctxRef._d100
-    -- stop 应停了循环（running=false 且 OnUpdate=nil）
-    assert(G == nil or G.running == false, "stop 未把 running 置 false")
+    G.dead = false; G.rest = nil
+    G.heroY = G.H + 50                        -- 放到画布底部以下 → 应判「坠落出局」
+    env.fireScript(cv, "OnUpdate", 0.05)
+    assert(G.dead == true, "坠出底部应触发死亡")
+    -- 单人 elimination：die→api:Finish→_EndPlay→收集→Tally。advance 收尾。
+    env.advance(2)
     local p = GL.Match:GetContext().phase
-    assert(p == "RESULTS" or p == "IDLE", "收尾 phase 异常: " .. tostring(p))
+    assert(p == "RESULTS" or p == "IDLE", "死亡后应立即结算，phase=" .. tostring(p))
 end)
 
-step("Close → teardown 被调（清理）", function()
+step("Close 不抛错", function() GL.Match:Close(); assert(true) end)
+
+-- ===== 出顶死亡（骑乘到顶）=====
+print("== 5) 出顶死亡 ==")
+step("被顶到画布顶部 → 死亡", function()
+    GL.Match:Start("down100", { prize = { mode = "friendly" } })
+    env.advance(5)
+    local ctx = GL.Match:GetContext()
+    local G = ctx._d100
+    local cv = GL.Match._api:Canvas()
+    G.dead = false
+    -- 模拟骑乘平台被托到顶：rest 平台 y≈0、角色不在其缺口内 → 骑乘分支把 heroY 设为负 → 出顶死。
+    local p = G.plats[1]
+    p.y = 0; p.gapX = 9999       -- 缺口移出画布 → inGap=false → 角色踩实心、随平台上移
+    G.rest = p
+    G.heroX = 10
+    env.fireScript(cv, "OnUpdate", 0.05)
+    assert(G.dead == true, "出顶应触发死亡")
+    env.advance(2)
     GL.Match:Close()
-    -- teardown 会把 ctx._d100 置 nil；但 Close 可能已换 ctx，这里宽松断言不抛错即可。
-    assert(true)
 end)
 
 -- ===== 围观者分支 =====
-print("== 5) 围观者不绑输入、不跑逻辑 ==")
-step("围观者 start 直接 return（不建 OnUpdate）", function()
-    -- 直接调 def.start 模拟围观者：构造一个 IsSpectator()=true 的假 api。
+print("== 6) 围观者不绑输入 ==")
+step("围观者 start 直接 return（不挂 OnUpdate）", function()
     local def = GL.Games:Get("down100")
     local fakeCanvas = GL.UI:Canvas()
     fakeCanvas:SetScript("OnUpdate", nil)
@@ -180,6 +175,7 @@ step("围观者 start 直接 return（不建 OnUpdate）", function()
         CaptureKeyboard = function() error("围观者不应申请键盘") end,
         SetScore = function() error("围观者不应计分") end,
         GetSeed = function() return 1 end,
+        Random = function(_, a, b) return a or 0 end,
     }
     def.start({ _d100 = { plats = {}, held = {} } }, fakeApi)
     assert(fakeCanvas:GetScript("OnUpdate") == nil, "围观者不应挂 OnUpdate")

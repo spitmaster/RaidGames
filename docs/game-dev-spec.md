@@ -55,10 +55,10 @@ return {
 
     --==== 元数据：框架据此「通用地」排名/校验/展示（§3 详解）====--
     tier        = "canvas",          -- "score" | "canvas"；默认 "score"
-    endMode     = "timed",           -- "timed" | "elimination" | "race"；本项目上/下100层=timed
+    endMode     = "elimination",     -- "timed" | "elimination" | "race"；上/下100层=elimination（摔死即出局）
     scoreOrder  = "desc",            -- "desc" 高者胜 | "asc" 低者胜（如用时）
     scoreUnit   = "层",              -- UI 显示单位（"次"/"层"/"秒"/"分"）
-    duration    = 30,                -- timed=窗口长度（上/下100层默认 30s，比时间内层数）
+    duration    = 60,                -- elimination/race=maxDuration 兜底秒；timed=窗口长度
     needsKeyboard = true,            -- 要键盘则声明，框架提前托管焦点
     seeded      = true,              -- 要不要统一随机种子（公平，§4）
     scoreCap    = function(dur) return 100 end,  -- 上限校验：超出此值的上报标「异常」不计冠军
@@ -90,11 +90,11 @@ return {
 
 | 值 | 含义 | 例子 | 框架行为 |
 |----|------|------|---------|
-| `"timed"` | 固定时间窗口，到点全员同时停 | 极速按键 10s、**上/下100层 30s**、打鸭子 10s | 倒计时结束起 `duration` 秒计时，到点广播停 |
-| `"elimination"` | 各自玩到死，先死先停，分数定格 | （本项目暂无；如生存挑战） | 你调 `api:Finish()` 上报；全员都 Finish 或到 `maxDuration` 封顶则结算 |
+| `"timed"` | 固定时间窗口，到点全员同时停 | 极速按键 10s、打鸭子 10s | 倒计时结束起 `duration` 秒计时，到点广播停 |
+| `"elimination"` | 各自玩到死，先死先停，分数定格 | **上/下100层**（撞刺/坠落/出顶即死） | 你在死亡时调 `api:Finish(score)`；单人立即结算，多人全员 Finish 或到 `maxDuration` 封顶则结算 |
 | `"race"` | 先达终点者优先 | 限时解谜 | 同 elimination，但 `scoreOrder` 通常配 `asc`（用时短者胜） |
 
-> **本项目当前三款 canvas 游戏全是 `timed`**（上/下100层比固定时间内的层数、打鸭子比 10s 内命中数）——`endMode="timed"` 是最成熟、与框架贴合最好的路径。`elimination`/`race` 框架留了位但暂无游戏用。
+> **elimination 用法**（已实现并由上/下100层验证）：游戏在死亡判定处调 `api:Finish(已得分)`——框架据此：①单人 → 立即结算；②多人 host → 收到所有非围观者的 Finish（出局）后提前结算，否则等 `duration` 当 maxDuration 兜底。`duration` 在 elimination 下是「没人死满这么久也强制结束」的安全上限。
 
 ### `scoreOrder` —— 谁是冠军
 

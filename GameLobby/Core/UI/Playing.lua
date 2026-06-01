@@ -222,10 +222,29 @@ local function Build(body)
     ------------------------------------------------------------
     function s:SetMode(tier)
         local canvasMode = (tier == "canvas")
-        self._hero:SetShown(not canvasMode)
-        self._lbLabel:SetShown(not canvasMode)
-        self._board:SetShown(not canvasMode)
-        self._canvas:SetShown(canvasMode)
+        self._hero:SetShown(not canvasMode)        -- 狂点钮三列只在 score 档
+        -- 实时榜两档都显示（自己高亮由 RankRow isSelf 实现），只是位置不同：
+        --   score 档=hero 下方全宽；canvas 档=画布右侧竖排（画布让出右边 208px）。
+        self._lbLabel:Show(); self._board:Show()
+        self._lbLabel:ClearAllPoints(); self._board:ClearAllPoints()
+        if canvasMode then
+            self._canvas:Show()
+            self._canvas:ClearAllPoints()
+            self._canvas:SetPoint("TOPLEFT", self._castbar, "BOTTOMLEFT", 0, -10)
+            self._canvas:SetPoint("BOTTOMRIGHT", self, "BOTTOMRIGHT", -208, 0)
+            self._lbLabel:SetPoint("TOPLEFT", self._canvas, "TOPRIGHT", 12, 0)
+            self._lbLabel:SetPoint("RIGHT", self, "RIGHT", -4, 0)
+            self._board:SetPoint("TOPLEFT", self._lbLabel, "BOTTOMLEFT", 0, -2)
+            self._board:SetPoint("RIGHT", self, "RIGHT", -4, 0)
+            self._board:SetPoint("BOTTOM", self, "BOTTOM", 0, 0)
+        else
+            self._canvas:Hide()
+            self._lbLabel:SetPoint("TOPLEFT", self._hero, "BOTTOMLEFT", 0, -8)
+            self._lbLabel:SetPoint("RIGHT", self, "RIGHT", -4, 0)
+            self._board:SetPoint("TOPLEFT", self._lbLabel, "BOTTOMLEFT", 0, -2)
+            self._board:SetPoint("RIGHT", self, "RIGHT", -4, 0)
+            self._board:SetPoint("BOTTOM", self, "BOTTOM", 0, 0)
+        end
     end
 
     -- 按当前游戏刷新窗体外观：castbar 标签用游戏名 + 布局模式（score/canvas）。
@@ -258,9 +277,9 @@ local function Build(body)
 
     function s._onShow()
         local ctx = GL.Match and GL.Match.GetContext and GL.Match:GetContext()
+        s:ApplyChrome(ctx)   -- 先定标签 + score/canvas 布局模式（含榜的位置）
         s:RenderPrize(ctx)
         s:RenderBoard(ctx)
-        s:ApplyChrome(ctx)   -- 标签 + score/canvas 布局模式
     end
 
     ------------------------------------------------------------

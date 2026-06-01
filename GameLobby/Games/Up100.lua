@@ -23,19 +23,19 @@ return {
     --==== 身份 ====--
     id        = "up100",
     name      = "是男人就上 100 层",
-    version   = "1.0.0",                                   -- 改版本同时改这里（热升级门控）
+    version   = "1.1.0",                                   -- 改版本同时改这里（热升级门控）
     glyph     = "Interface\\Icons\\Ability_Hunter_Pathfinding",
-    descLines = { "极限攀登", "踩平台往上，越高越强" },
+    descLines = { "踩平台往上，越高越强", "撞刺/坠落即死" },
 
     --==== 元数据（框架据此通用排名/校验/展示）====--
     tier        = "canvas",          -- 自绘档
-    endMode     = "timed",           -- 固定 30s 窗口，到点全员同时停
+    endMode     = "elimination",     -- 玩到死：撞刺/坠出画布底 → 立即出局，分定格在已爬层数
     scoreOrder  = "desc",            -- 层数高者胜
     scoreUnit   = "层",
-    duration    = 30,
+    duration    = 60,                -- maxDuration 兜底
     needsKeyboard = true,            -- 方向键控角色
     seeded      = true,              -- 各端关卡一致
-    scoreCap    = function() return 999 end,   -- 上限校验（与 down100 对称放宽到 999）
+    scoreCap    = function() return 999 end,   -- 仅防离谱上报
 
     locked      = false,
 
@@ -75,12 +75,15 @@ return {
         local minPx, maxPx = 8, W - G.pltW - 8
         if maxPx < minPx then maxPx = minPx end
         local reachX = 130          -- 相邻层水平最大偏移（滞空时间 × moveSpeed 内可达）
+        local SPIKE_PCT = 26        -- 带刺平台占比（%）：落上即死
         local prevPx = math.floor((minPx + maxPx) / 2)   -- 第一层居中（角色开局站这）
         for i = 1, layers do
             local lo = math.max(minPx, prevPx - reachX)
             local hi = math.min(maxPx, prevPx + reachX)
             local px = (i == 1) and prevPx or api:Random(math.floor(lo), math.floor(hi))
-            G.platforms[i] = { worldY = i * G.gapY, px = px, tier = i }
+            -- 首层与第 2 层不带刺（给安全起步）；其余按比例带刺。
+            local spiked = (i > 2) and (api:Random(1, 100) <= SPIKE_PCT) or false
+            G.platforms[i] = { worldY = i * G.gapY, px = px, tier = i, spiked = spiked }
             prevPx = px
         end
 
@@ -110,6 +113,14 @@ return {
         G.vy = 0
         G.maxTier = 1                                -- 已登上的最高层（计分依据）
         G.held = { left = false, right = false }
+        G.dead = false
+
+        -- 死亡提示文字（居中，初始隐藏）。
+        local dtext = cv:CreateFontString(nil, "OVERLAY", "GameFontNormalHuge")
+        dtext:SetPoint("CENTER", cv, "CENTER", 0, 0)
+        dtext:SetTextColor(1.0, 0.35, 0.25)
+        dtext:Hide()
+        G.deathText = dtext
 
         api.G = G   -- 挂到 api 供 start/stop/teardown 共享（仅本局，框架每局重建 api）
     end,
@@ -135,8 +146,22 @@ return {
         -- 投影：世界高度 worldY → 画布系 y（左下为原点，向上为正）。
         local function projY(worldY) return worldY - G.camY end
 
+        -- 死亡：停循环、显示提示、上报最终层数（elimination：单人立即结算）。
+        local function die(reason)
+            if G.dead then return end
+            G.dead = true
+            if G.cv then G.cv:SetScript("OnUpdate", nil) end
+            if G.deathText then
+                G.deathText:SetText("摔 死 了 · " .. reason)
+                G.deathText:Show()
+            end
+            api:Finish(G.maxTier - 1)
+        end
+        G._die = die
+
         -- 主循环（dt 驱动）：移动 → 重力/弹跳 → 相机跟随 → 计分 → 重绘。
         G.cv:SetScript("OnUpdate", function(_, dt)
+            if G.dead then return end
             dt = dt or 0
             if dt <= 0 then return end
             if dt > 0.1 then dt = 0.1 end   -- 卡顿封顶，防穿模
@@ -167,6 +192,10 @@ return {
                     if prevWorldY >= top - 1 and G.charWorldY <= top then
                         -- x 重叠判定（角色与平台水平有交集）
                         if G.charX + cs > p.px and G.charX < p.px + G.pltW then
+                            if p.spiked then
+                                G.charWorldY = top       -- 贴到刺面上
+                                die("撞 到 刺"); return
+                            end
                             G.charWorldY = top
                             G.vy = G.jumpVel              -- 自动向上弹
                             if p.tier > G.maxTier then G.maxTier = p.tier end
@@ -176,15 +205,13 @@ return {
                 end
             end
 
-            -- 4) 防掉出世界底：clamp 到第一层平台高度并原地重新弹起（无死亡惩罚）。
-            local floorY = G.platforms[1].worldY + G.pltH
-            if G.charWorldY < floorY then
-                G.charWorldY = floorY
-                G.vy = G.jumpVel
+            -- 4) 坠落死：角色脚底投影到画布底部以下（摔出视野）→ 立即出局（elimination）。
+            local chCanvasY = G.charWorldY - G.camY
+            if chCanvasY <= 0 then
+                die("坠 落 出 局"); return
             end
 
             -- 5) 相机跟随：角色在画布内高度超过 scrollY 阈值则世界下滚（camY 增大），角色保持视野内。
-            local chCanvasY = G.charWorldY - G.camY
             if chCanvasY > G.scrollY then
                 G.camY = G.charWorldY - G.scrollY
             end
@@ -206,6 +233,9 @@ return {
                 if y > -G.pltH and y < H + G.pltH then
                     local t = G.pool[poolIdx]
                     if not t then break end             -- 池子用尽（理论不会，可见层 ≤ poolN）
+                    -- 带刺平台染红（落上即死），普通土黄。池子复用，故每帧按当前层重设色。
+                    if p.spiked then t:SetColorTexture(0.90, 0.22, 0.16, 1.0)
+                    else t:SetColorTexture(0.55, 0.45, 0.30, 1.0) end
                     t:ClearAllPoints()
                     t:SetPoint("BOTTOMLEFT", G.cv, "BOTTOMLEFT", p.px, y)
                     t:Show()
@@ -232,6 +262,7 @@ return {
         if G.cv then G.cv:SetScript("OnUpdate", nil) end
         if G.charTex then G.charTex:Hide() end
         if G.pool then for _, t in ipairs(G.pool) do t:Hide() end end
+        if G.deathText then G.deathText:Hide() end
         api.G = nil
     end,
 

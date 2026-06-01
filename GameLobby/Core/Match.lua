@@ -179,6 +179,7 @@ local function buildApi(ctx)
     -- 主动结束本端（elimination/race 用：摔死/达终点即调）。timed 游戏一般不必，
     -- 框架会在 duration 到点统一收分；调了只是提前定格本端分、停止继续计分。
     function api:Finish(score)
+        if ctx._localFinished then return end
         if score ~= nil then
             local n = tonumber(score) or 0
             if n ~= (ctx.scores[meNorm] or 0) and ctx.phase == PHASE.PLAYING
@@ -187,6 +188,18 @@ local function buildApi(ctx)
             end
         end
         ctx._localFinished = true
+        -- elimination(玩到死)：本端出局 → 上报最终分 + 触发结束判定。
+        local def = GL.Games and GL.Games:Get(ctx.gameId)
+        if def and def.endMode == "elimination" then
+            Match:ReportScore(ctx.scores[meNorm] or 0)   -- 广播 Result（host 据此知道本人出局；单人不广播）
+            ctx._finished = ctx._finished or {}
+            ctx._finished[meNorm] = true
+            if not inGroup() then
+                Match:_EndPlay()                -- 单人：死即立刻结束本局
+            elseif ctx.isHost then
+                Match:_CheckEliminationEnd()    -- host：全员出局则提前结束
+            end
+        end
     end
 
     function api:IsSpectator()
@@ -471,6 +484,7 @@ function Match:_BeginPlay()
     -- 清本轮分数（加赛时只保留并列者，已在 Tie 处理时重建 players）。
     for k in pairs(ctx.scores) do ctx.scores[k] = nil end
     ctx._localFinished = nil   -- 重置「本端主动 Finish」标记（新一轮/加赛重新可计分）
+    ctx._finished = {}         -- elimination：本轮已出局玩家集合（host 据此判全员出局提前结束）
     Match._liveLast = 0
     Match._liveAccum = false
     Match._liveSent = -1   -- 新一轮重置去重基线（加赛/正赛各自从头算）
@@ -549,6 +563,25 @@ function Match:_EndPlay()
             if Match._tick ~= mytick then return end
             Match:_Tally()
         end)
+    end
+end
+
+-- elimination（玩到死）提前结束判定：host 端，本轮所有非围观参与者都已出局（发了 Result）
+-- → 不必等 maxDuration，立刻 _EndPlay 进结算。timed 游戏不调此函数（仍按 duration 到点结束）。
+function Match:_CheckEliminationEnd()
+    local ctx = self._ctx
+    if not ctx.isHost then return end
+    if ctx.phase ~= PHASE.PLAYING then return end
+    local fin = ctx._finished or {}
+    local total, done = 0, 0
+    for norm, p in pairs(ctx.players) do
+        if not p.spectator then
+            total = total + 1
+            if fin[norm] then done = done + 1 end
+        end
+    end
+    if total > 0 and done >= total then
+        self:_EndPlay()
     end
 end
 
@@ -896,6 +929,14 @@ local function onResult(sender, matchId, playerName, score, round)
     if tonumber(round) ~= ctx.round then return end
     local norm = GL.Roster and GL.Roster:Norm(playerName) or playerName
     ctx.scores[norm] = tonumber(score) or 0
+    -- elimination：收到 Result = 该玩家出局（游戏中只发 Live，出局才发 Result）。
+    -- 记入 finished，全员出局则提前结束（不等 maxDuration）。
+    local def = GL.Games and GL.Games:Get(ctx.gameId)
+    if def and def.endMode == "elimination" then
+        ctx._finished = ctx._finished or {}
+        ctx._finished[norm] = true
+        Match:_CheckEliminationEnd()
+    end
 end
 
 -- Live: matchId,name,score —— 比赛中节流广播的实时分数（仅供观感，不参与排名裁决）。

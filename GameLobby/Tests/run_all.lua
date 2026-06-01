@@ -280,11 +280,12 @@ step("ExportGame(speedclick) 成功", function()
     local s, r = GL.Import:ExportGame("speedclick")
     assert(type(s) == "string" and s:sub(1, 4) == "!GL:", "导出失败: " .. tostring(r))
 end)
-step("ExportGame(memory) 应拒绝（占位无 code）", function()
-    -- down100/up100 现已是真实游戏（带 def.code，可导出）；用仍是 locked 占位的 memory 验证
-    -- 「无 code 的占位游戏不可导出」这条逻辑。
-    local s = GL.Import:ExportGame("memory")
-    assert(s == nil, "占位游戏不应可导出")
+step("ExportGame 拒绝无 code 的占位游戏", function()
+    -- down100/up100 现已是真实游戏（带 def.code，可导出）；注册一个临时无 code 占位，
+    -- 验证「无 code 的游戏不可导出」这条逻辑。
+    GL:RegisterGame({ id = "_tmp_locked", name = "临时占位", version = "0.0.1", locked = true })
+    local s = GL.Import:ExportGame("_tmp_locked")
+    assert(s == nil, "无 code 的占位游戏不应可导出")
 end)
 step("ExportGame(down100/up100/duckhunt) 应成功（真实游戏可分享）", function()
     for _, id in ipairs({ "down100", "up100", "duckhunt" }) do
