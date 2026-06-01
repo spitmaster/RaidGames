@@ -66,6 +66,9 @@ Core\Push.lua
 
 # --- 游戏（最后；RegisterGame 时核心已就绪）---
 Games\SpeedClick.lua
+Games\Down100.lua
+Games\Up100.lua
+Games\DuckHunt.lua
 
 # --- 引导器（最末，触发 GL:Init 队列 flush + 回收待注册游戏）---
 Core\Init.lua

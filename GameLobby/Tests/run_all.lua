@@ -71,6 +71,9 @@ local loadOrder = {
     "Core/GameImport.lua",
     "Core/Push.lua",
     "Games/SpeedClick.lua",
+    "Games/Down100.lua",
+    "Games/Up100.lua",
+    "Games/DuckHunt.lua",
     "Core/Init.lua",
 }
 for _, rel in ipairs(loadOrder) do
@@ -277,9 +280,17 @@ step("ExportGame(speedclick) 成功", function()
     local s, r = GL.Import:ExportGame("speedclick")
     assert(type(s) == "string" and s:sub(1, 4) == "!GL:", "导出失败: " .. tostring(r))
 end)
-step("ExportGame(down100) 应拒绝", function()
-    local s = GL.Import:ExportGame("down100")
+step("ExportGame(memory) 应拒绝（占位无 code）", function()
+    -- down100/up100 现已是真实游戏（带 def.code，可导出）；用仍是 locked 占位的 memory 验证
+    -- 「无 code 的占位游戏不可导出」这条逻辑。
+    local s = GL.Import:ExportGame("memory")
     assert(s == nil, "占位游戏不应可导出")
+end)
+step("ExportGame(down100/up100/duckhunt) 应成功（真实游戏可分享）", function()
+    for _, id in ipairs({ "down100", "up100", "duckhunt" }) do
+        local s = GL.Import:ExportGame(id)
+        assert(type(s) == "string" and s:sub(1, 4) == "!GL:", id .. " 导出失败（应得 !GL: 串）")
+    end
 end)
 
 -- ============ 汇总 ============

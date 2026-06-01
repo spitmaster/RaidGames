@@ -104,8 +104,9 @@ if (-not $NoCheck) {
         }
         Write-Ok "通过（$($luaFiles.Count) 个 .lua 文件）"
 
-        # 无头集成测试（加载全插件 + 驱动 UI/状态机/线路/战绩；任一失败中止部署）
-        $harnesses = @("Tests\Match_selftest.lua", "Tests\run_all.lua", "Tests\run_match.lua")
+        # 无头集成测试（加载全插件 + 驱动 UI/状态机/线路/战绩 + 各 canvas 游戏；任一失败中止部署）
+        $harnesses = @("Tests\Match_selftest.lua", "Tests\run_all.lua", "Tests\run_match.lua",
+                       "Tests\down100_selftest.lua", "Tests\up100_selftest.lua", "Tests\duckhunt_selftest.lua")
         $hfail = 0
         foreach ($h in $harnesses) {
             $hp = Join-Path $Source $h
