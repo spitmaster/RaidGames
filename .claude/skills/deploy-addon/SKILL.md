@@ -7,13 +7,17 @@ description: 打包并部署「游戏大厅」(GameLobby) 插件到魔兽世界�
 
 把仓库里的 `GameLobby/` 插件部署到魔兽世界插件目录，让改动能在游戏里生效。
 
-## 默认游戏插件目录
+## 游戏插件目录（多机自动检测）
+
+脚本内置候选路径列表 `$KnownRoots`（用户有多台电脑）：
 
 ```
-I:\World of Warcraft\_classic_titan_\Interface\AddOns
+E:\games\World of Warcraft\_classic_titan_\Interface\AddOns   # 公司电脑
+I:\World of Warcraft\_classic_titan_\Interface\AddOns          # 家里电脑
 ```
 
-部署目标即 `<上面这个目录>\GameLobby`。
+**不传 `-AddonsRoot` 时**：自动部署到**当前这台机器上存在的所有**候选路径（用 `Test-Path` 检测，不存在的自动跳过）。所以换电脑啥都不用改，跑同一条命令即可。
+部署目标即 `<某个候选目录>\GameLobby`。新增机器：在 `deploy.ps1` 的 `$KnownRoots` 加一行。
 
 ## 怎么做
 
@@ -30,7 +34,7 @@ powershell -ExecutionPolicy Bypass -File .claude\skills\deploy-addon\deploy.ps1
 
 ## 常用参数
 
-- 换游戏目录：`-AddonsRoot "D:\WoW\...\Interface\AddOns"`
+- 只部署到某一个目录（覆盖自动检测）：`-AddonsRoot "D:\WoW\...\Interface\AddOns"`
 - 只预览不写入：`-DryRun`（先看会复制/删除什么）
 - 跳过语法检查：`-NoCheck`（不建议）
 

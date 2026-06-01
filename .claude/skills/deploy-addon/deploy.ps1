@@ -6,7 +6,9 @@
     2. 镜像部署：把 GameLobby/ 复制到 <AddOns>\GameLobby，排除开发文件（Tests/ dist/ .git 等）。
     3. 报告：版本号、复制文件数、目标路径。
 .PARAMETER AddonsRoot
-    游戏的 Interface\AddOns 目录。默认 I:\World of Warcraft\_classic_titan_\Interface\AddOns
+    游戏的 Interface\AddOns 目录。**不传**时自动用内置候选列表（见 $KnownRoots），
+    部署到当前这台机器上**存在的所有**候选路径——方便在多台电脑（公司/家）间切换，无需改脚本。
+    传了就只部署到指定的这一个（覆盖自动检测）。
 .PARAMETER NoCheck
     跳过 Lua 语法预检。
 .PARAMETER DryRun
@@ -17,19 +19,32 @@
     powershell -ExecutionPolicy Bypass -File deploy.ps1 -AddonsRoot "D:\WoW\Interface\AddOns" -DryRun
 #>
 param(
-    [string]$AddonsRoot = "I:\World of Warcraft\_classic_titan_\Interface\AddOns",
+    [string]$AddonsRoot = "",
     [switch]$NoCheck,
     [switch]$DryRun
 )
 
 $ErrorActionPreference = "Stop"
 
+# --- 已知游戏插件目录（多机：公司 E: / 家里 I:；新增机器在此加一行即可）---
+# 不传 -AddonsRoot 时，部署到下列**当前机器上存在**的所有路径。
+$KnownRoots = @(
+    "E:\games\World of Warcraft\_classic_titan_\Interface\AddOns",   # 公司电脑
+    "I:\World of Warcraft\_classic_titan_\Interface\AddOns"          # 家里电脑
+)
+
 # --- 路径解析 ---
 # 脚本位于 <repo>\.claude\skills\deploy-addon\deploy.ps1 → 仓库根上溯 3 层
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..\..")).Path
 $Source   = Join-Path $RepoRoot "GameLobby"
 $AddonName = "GameLobby"
-$Target   = Join-Path $AddonsRoot $AddonName
+
+# 目标根列表：显式指定优先；否则取候选里实际存在的。
+if ($AddonsRoot -ne "") {
+    $TargetRoots = @($AddonsRoot)
+} else {
+    $TargetRoots = @($KnownRoots | Where-Object { Test-Path $_ })
+}
 
 function Write-Step($msg) { Write-Host "==> $msg" -ForegroundColor Cyan }
 function Write-Ok($msg)   { Write-Host "    $msg" -ForegroundColor Green }
@@ -49,7 +64,12 @@ if (Test-Path $tocPath) {
 }
 Write-Step "插件 $AddonName v$version"
 Write-Host  "    源：$Source"
-Write-Host  "    目标：$Target"
+if ($TargetRoots.Count -eq 0) {
+    Write-Host "    没有可部署的目标：内置候选路径在本机都不存在。" -ForegroundColor Red
+    Write-Host "    用 -AddonsRoot 指定本机的 Interface\AddOns，或在脚本 \$KnownRoots 里加一行。" -ForegroundColor Red
+    exit 1
+}
+foreach ($r in $TargetRoots) { Write-Host "    目标：$(Join-Path $r $AddonName)" }
 
 # --- 1. Lua 语法预检 ---
 if (-not $NoCheck) {
@@ -106,41 +126,45 @@ if (-not $NoCheck) {
     }
 }
 
-# --- 2. 镜像部署（robocopy /MIR，排除开发文件）---
-Write-Step "部署到游戏插件目录"
-if (-not (Test-Path $AddonsRoot)) {
-    Write-Host "找不到游戏插件根目录：$AddonsRoot" -ForegroundColor Red
-    Write-Host "用 -AddonsRoot 指定正确路径。" -ForegroundColor Red
-    exit 1
-}
-
+# --- 2. 镜像部署（robocopy /MIR，排除开发文件）逐个目标根执行 ---
 # 排除：开发用目录 + 版本控制。Tests/ 与 dist/ 不被 .toc 加载，不应进游戏。
 $excludeDirs  = @("Tests", "dist", ".git", ".github")
 $excludeFiles = @()  # 如需排除特定文件可加，如 "*.bak"
 
-$rcArgs = @("`"$Source`"", "`"$Target`"", "/MIR", "/NJH", "/NJS", "/NP", "/NDL")
-foreach ($d in $excludeDirs)  { $rcArgs += "/XD"; $rcArgs += "`"$(Join-Path $Source $d)`"" }
-foreach ($f in $excludeFiles) { $rcArgs += "/XF"; $rcArgs += $f }
-if ($DryRun) { $rcArgs += "/L" }
+$anyFail = $false
+foreach ($root in $TargetRoots) {
+    $Target = Join-Path $root $AddonName
+    Write-Step "部署到 $Target"
 
-$rcCmd = "robocopy " + ($rcArgs -join " ")
-$out = cmd /c $rcCmd 2>&1
-$rc = $LASTEXITCODE
+    $rcArgs = @("`"$Source`"", "`"$Target`"", "/MIR", "/NJH", "/NJS", "/NP", "/NDL")
+    foreach ($d in $excludeDirs)  { $rcArgs += "/XD"; $rcArgs += "`"$(Join-Path $Source $d)`"" }
+    foreach ($f in $excludeFiles) { $rcArgs += "/XF"; $rcArgs += $f }
+    if ($DryRun) { $rcArgs += "/L" }
 
-# robocopy 退出码：0-7 = 成功，>=8 = 失败
-if ($rc -ge 8) {
-    Write-Host "robocopy 失败（退出码 $rc）：" -ForegroundColor Red
-    $out | ForEach-Object { Write-Host "    $_" }
-    exit 1
+    $rcCmd = "robocopy " + ($rcArgs -join " ")
+    $out = cmd /c $rcCmd 2>&1
+    $rc = $LASTEXITCODE
+
+    # robocopy 退出码：0-7 = 成功，>=8 = 失败
+    if ($rc -ge 8) {
+        Write-Host "    robocopy 失败（退出码 $rc）：" -ForegroundColor Red
+        $out | ForEach-Object { Write-Host "    $_" }
+        $anyFail = $true
+        continue
+    }
+
+    # 统计复制/删除行
+    ($out | Where-Object { $_ -match '\S' }) | ForEach-Object { Write-Host "    $_" -ForegroundColor DarkGray }
+
+    if ($DryRun) {
+        Write-Warn2 "DryRun：以上为将执行的变更，未实际写入。"
+    } else {
+        $deployed = (Get-ChildItem -Path $Target -Recurse -File -ErrorAction SilentlyContinue).Count
+        Write-Ok "部署完成：$AddonName v$version → $Target（$deployed 个文件）"
+    }
 }
 
-# 统计复制/删除行
-($out | Where-Object { $_ -match '\S' }) | ForEach-Object { Write-Host "    $_" -ForegroundColor DarkGray }
-
-if ($DryRun) {
-    Write-Step "DryRun：以上为将执行的变更，未实际写入。"
-} else {
-    $deployed = (Get-ChildItem -Path $Target -Recurse -File -ErrorAction SilentlyContinue).Count
-    Write-Ok "部署完成：$AddonName v$version → $Target（$deployed 个文件）"
+if ($anyFail) { exit 1 }
+if (-not $DryRun) {
     Write-Warn2 "游戏内请 /reload 或重进游戏；首次安装需在角色选择界面『AddOns』里启用。"
 }
