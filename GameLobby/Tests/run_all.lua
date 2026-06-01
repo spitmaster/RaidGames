@@ -227,6 +227,50 @@ end)
 step("单人 Results 屏渲染", function() GL.UI:ShowScreen("results") end)
 if GL.Match.Close then GL.Match:Close() end
 
+-- ============ 7c) canvas 档地基冒烟：自绘游戏生命周期 + 新 api（D21 通用容器）============
+print("== 7c) canvas 档地基 ==")
+local cTrace = {}
+local cSeed
+GL:RegisterGame({
+    id = "smoketest_canvas", name = "冒烟画布", version = "1.0.0",
+    tier = "canvas", endMode = "timed", scoreOrder = "desc", scoreUnit = "层",
+    duration = 10, needsKeyboard = true, seeded = true,
+    scoreCap = function() return 100 end,
+    setup = function(ctx, api)
+        cTrace.setup = true
+        local cv = api:Canvas(); assert(cv, "canvas 档应能拿到 api:Canvas()")
+        cSeed = api:GetSeed(); assert(type(cSeed) == "number", "GetSeed 应返回数字")
+        local t = cv:CreateTexture(nil, "ARTWORK"); t:SetColorTexture(1, 0, 0, 1); t:SetSize(10, 10)
+    end,
+    start = function(ctx, api)
+        cTrace.start = true
+        api:CaptureKeyboard(function() end)   -- 申请键盘（框架托管 propagate/ESC/归还）
+        api:SetScore(42)                      -- 直接设分（上/下100层式）
+    end,
+    stop = function() cTrace.stop = true end,
+    teardown = function() cTrace.teardown = true end,
+})
+step("注册 canvas 冒烟游戏", function()
+    assert(GL.Games:Get("smoketest_canvas"), "应已注册")
+end)
+step("canvas 档跑通一局（单人）+ setup/start 被调", function()
+    GL.Match:Start("smoketest_canvas", { prize = { mode = "friendly" } })
+    env.advance(5)   -- 过倒计时进入 PLAYING
+    assert(cTrace.setup, "setup 未被调用")
+    assert(cTrace.start, "start 未被调用")
+    assert(GL.Match:GetContext().scores[GL.Roster:Me()] == 42, "SetScore(42) 未生效")
+end)
+step("时间到 → stop 被调 + 收尾", function()
+    env.advance(12)  -- 跑完 10s + 收集窗口
+    assert(cTrace.stop, "stop 未在时间到时调用")
+    local p = GL.Match:GetContext().phase
+    assert(p == "RESULTS" or p == "IDLE", "canvas 局收尾 phase 异常: " .. tostring(p))
+end)
+step("Close → teardown 被调（键盘归还）", function()
+    GL.Match:Close()
+    assert(cTrace.teardown, "teardown 未在 Close 时调用")
+end)
+
 -- ============ 8) 导出（reason 路径 + 占位游戏）============
 print("== 8) 导出 ==")
 step("ExportGame(speedclick) 成功", function()

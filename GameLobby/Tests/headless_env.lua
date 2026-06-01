@@ -16,6 +16,13 @@ function M.FireEvent(event, ...)
     end
 end
 
+-- 手动触发某 frame 的脚本（供 canvas 游戏测试驱动 OnUpdate/OnKeyDown/OnKeyUp/OnMouseDown）。
+-- 例：M.fireScript(canvas, "OnUpdate", 0.016) / M.fireScript(canvas, "OnKeyDown", "LEFT")。
+function M.fireScript(frame, name, ...)
+    local fn = frame and frame._scripts and frame._scripts[name]
+    if fn then return fn(frame, ...) end
+end
+
 -- ============ C_Timer 模拟（手动推进）============
 local timers = {}   -- { {at=, fn=}, ... }
 local NOW = 1000.0
@@ -83,6 +90,7 @@ local realMethods = {
     IsMouseEnabled = function(s) return s._mouse end,
     EnableMouse = function(s, b) s._mouse = not not b end,
     EnableKeyboard = function(s, b) s._kbd = not not b end,
+    SetPropagateKeyboardInput = function(s, b) s._propagateKbd = not not b end,
     SetAlpha = function(s, a) s._alpha = a end,
     GetAlpha = function(s) return num(s._alpha, 1) end,
     -- 文本

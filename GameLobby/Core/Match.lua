@@ -116,22 +116,25 @@ end
 ------------------------------------------------------------
 -- 每场重建一次，闭包持 ctx。Finish 由 Match 在 duration 到点统一触发 ReportScore，
 -- 游戏不必自己调（契约 §6 注释）。
+-- 安全调用游戏生命周期钩子：def[name] 存在且 cond≠false 才调，pcall 兜底（游戏抛错不连累框架）。
+local function callGame(def, name, ctx, api, cond)
+    if cond == false then return end
+    if def and type(def[name]) == "function" then
+        local ok, err = pcall(def[name], ctx, api)
+        if not ok then geterrorhandler()(err) end
+    end
+end
+
 local function buildApi(ctx)
     local meNorm = GL.Roster and GL.Roster:Me() or "self"
     local api = {}
 
-    -- 累加本端分数 → 本地 Emit LIVE_SCORE（每次都触发，UI 即刻刷）；跨端广播节流（契约 §3）。
-    -- 之前把本地 emit 也并入节流，导致用户看见自己屏幕上的数字被锁在 0.4s 一跳——这是 UI bug，
-    -- 节流的本意只是「别用 Live 通讯刷屏」，本地反馈不该被波及。
-    function api:AddScore(delta)
-        delta = tonumber(delta) or 0
-        if ctx.phase ~= PHASE.PLAYING then return end          -- 窗口外不计
-        if ctx.players[meNorm] and ctx.players[meNorm].spectator then return end
-        local cur = (ctx.scores[meNorm] or 0) + delta
+    -- 把「本端当前分」落到 ctx + 本地 Emit + 跨端节流广播。AddScore/SetScore 共用。
+    -- 本地每次都 Emit（自己屏即刻刷）；跨端 ≥LIVE_THROTTLE 一条且分数变化才发（契约 §3），
+    -- 未到点的累积留给 _EndPlay 尾包补发（防"别用 Live 刷屏"，本地反馈不受节流波及）。
+    local function pushScore(cur)
         ctx.scores[meNorm] = cur
-        -- 本地：每次点击都 Emit，让自己屏的计数/进度条实时响应。
         emit("LIVE_SCORE", meNorm, cur)
-        -- 跨端：≥LIVE_THROTTLE 一条，且分数变化才发；未到点的累积留给 _EndPlay 尾包补发。
         Match._liveAccum = true
         local now = GetTime()
         if now - Match._liveLast >= LIVE_THROTTLE then
@@ -146,21 +149,111 @@ local function buildApi(ctx)
         end
     end
 
+    -- 计分守卫：仅 PLAYING、非围观、未主动 Finish 才计。
+    local function canScore()
+        if ctx.phase ~= PHASE.PLAYING then return false end
+        if ctx._localFinished then return false end
+        if ctx.players[meNorm] and ctx.players[meNorm].spectator then return false end
+        return true
+    end
+
+    -- 累加分（刷分类/打鸭子用：每次命中 +1）。
+    function api:AddScore(delta)
+        delta = tonumber(delta) or 0
+        if not canScore() then return end
+        pushScore((ctx.scores[meNorm] or 0) + delta)
+    end
+
+    -- 直接设分（上/下100层用：SetScore(当前层数)）。
+    function api:SetScore(n)
+        n = tonumber(n) or 0
+        if not canScore() then return end
+        if n == (ctx.scores[meNorm] or 0) then return end
+        pushScore(n)
+    end
+
     function api:GetScore()
         return ctx.scores[meNorm] or 0
     end
 
-    -- 返回 UI 暴露的狂点钮句柄（仅 PlayingScreen 存在时）。游戏挂输入用。
-    function api:SmashButton()
-        if GL.UI and GL.UI.SmashButton then
-            return GL.UI:SmashButton()
+    -- 主动结束本端（elimination/race 用：摔死/达终点即调）。timed 游戏一般不必，
+    -- 框架会在 duration 到点统一收分；调了只是提前定格本端分、停止继续计分。
+    function api:Finish(score)
+        if score ~= nil then
+            local n = tonumber(score) or 0
+            if n ~= (ctx.scores[meNorm] or 0) and ctx.phase == PHASE.PLAYING
+                and not (ctx.players[meNorm] and ctx.players[meNorm].spectator) then
+                pushScore(n)
+            end
         end
-        return nil
+        ctx._localFinished = true
     end
 
     function api:IsSpectator()
         local p = ctx.players[meNorm]
         return p and p.spectator and true or false
+    end
+
+    -- 时钟：剩余/已用秒（来自 ctx.remaining，tick 每 0.05s 刷）。游戏别自己 GetTime 算窗口。
+    function api:Remaining()
+        return ctx.remaining or ctx.duration or 0
+    end
+    function api:Elapsed()
+        return (ctx.duration or 0) - (ctx.remaining or ctx.duration or 0)
+    end
+
+    -- 全场统一随机种子（公平）：从 matchId+round 确定性派生。matchId 经 Start 广播各端一致、
+    -- round 经 Tie/Begin 同步，故各端 GetSeed() 结果相同 → 关卡布局一致（不改协议，契约不变量 #4）。
+    function api:GetSeed()
+        local id = (ctx.matchId or "") .. ":" .. tostring(ctx.round or 0)
+        local h = 5381
+        for i = 1, #id do h = (h * 33 + id:byte(i)) % 2147483647 end
+        return h
+    end
+
+    -- 刷分档：返回标准比赛屏的狂点钮句柄（仅 PlayingScreen 存在时）。游戏挂输入用。
+    function api:SmashButton()
+        if GL.UI and GL.UI.SmashButton then return GL.UI:SmashButton() end
+        return nil
+    end
+
+    -- 自绘档：返回比赛屏中央的画布 Frame（往里建 Texture/子 Frame；仅 PlayingScreen 存在时）。
+    function api:Canvas()
+        if GL.UI and GL.UI.Canvas then return GL.UI:Canvas() end
+        return nil
+    end
+
+    -- 自绘档键盘：框架托管 SetPropagateKeyboardInput + ESC 透传（spec §5.3 已真机验证）。
+    -- 游戏只给 onKeyDown(key)/onKeyUp(key) 回调；移动键被吞→角色不动，ESC 永远放行。
+    -- _EndPlay/Close 时框架自动 ReleaseKeyboard，buggy 游戏也锁不死玩家。
+    function api:CaptureKeyboard(onKeyDown, onKeyUp)
+        local canvas = self:Canvas()
+        if not canvas then return false end
+        Match._kbCanvas = canvas
+        canvas:EnableKeyboard(true)
+        if canvas.SetPropagateKeyboardInput then canvas:SetPropagateKeyboardInput(false) end
+        canvas:SetScript("OnKeyDown", function(fr, key)
+            if key == "ESCAPE" then
+                if fr.SetPropagateKeyboardInput then fr:SetPropagateKeyboardInput(true) end
+                return
+            end
+            if fr.SetPropagateKeyboardInput then fr:SetPropagateKeyboardInput(false) end
+            if onKeyDown then onKeyDown(key) end
+        end)
+        canvas:SetScript("OnKeyUp", function(fr, key)
+            if key == "ESCAPE" then return end
+            if onKeyUp then onKeyUp(key) end
+        end)
+        return true
+    end
+    function api:ReleaseKeyboard()
+        local canvas = Match._kbCanvas
+        if not canvas then return end
+        canvas:EnableKeyboard(false)
+        if canvas.SetPropagateKeyboardInput then canvas:SetPropagateKeyboardInput(true) end
+        canvas:SetScript("OnKeyDown", nil)
+        canvas:SetScript("OnKeyUp", nil)
+        Match._kbCanvas = nil
     end
 
     return api
@@ -359,6 +452,7 @@ function Match:_BeginPlay()
     local ctx = self._ctx
     -- 清本轮分数（加赛时只保留并列者，已在 Tie 处理时重建 players）。
     for k in pairs(ctx.scores) do ctx.scores[k] = nil end
+    ctx._localFinished = nil   -- 重置「本端主动 Finish」标记（新一轮/加赛重新可计分）
     Match._liveLast = 0
     Match._liveAccum = false
     Match._liveSent = -1   -- 新一轮重置去重基线（加赛/正赛各自从头算）
@@ -371,14 +465,15 @@ function Match:_BeginPlay()
     emit("MATCH_PLAY_BEGIN", ctx)
     if GL.UI and GL.UI.ShowScreen then GL.UI:ShowScreen("playing") end
 
-    -- 调游戏生命周期：host 端先 host()，所有端 client()（采集输入）。
-    if def then
-        if ctx.isHost and type(def.host) == "function" then
-            local ok, err = pcall(def.host, ctx, api); if not ok then geterrorhandler()(err) end
-        end
-        if type(def.client) == "function" then
-            local ok, err = pcall(def.client, ctx, api); if not ok then geterrorhandler()(err) end
-        end
+    -- 调游戏生命周期（契约 §6 / game-dev-spec）：
+    --   host 端先 host()；再 setup()（建场景）；再 start()（开循环/收输入）。
+    --   旧契约游戏（极速按键 tier=score）无 start，则回落调 client()（向后兼容，不破坏 M1）。
+    callGame(def, "host", ctx, api, ctx.isHost)   -- 仅 host
+    callGame(def, "setup", ctx, api)
+    if def and type(def.start) == "function" then
+        callGame(def, "start", ctx, api)
+    else
+        callGame(def, "client", ctx, api)
     end
 
     -- 计时：GetTime() 基准，不依赖帧率（SPEC 功能 4，误差 ≤±0.1s）。
@@ -406,6 +501,12 @@ function Match:_EndPlay()
     bumpTick()  -- 取消 PLAYING tick
 
     emit("MATCH_PLAY_END", ctx)
+
+    -- 游戏侧 stop()：冻结、停 OnUpdate（契约 §6）。再自动归还键盘——
+    -- 即使游戏忘了 ReleaseKeyboard，框架也保证比赛结束后玩家移动键恢复（spec §5.3 安全约束）。
+    local def = GL.Games and GL.Games:Get(ctx.gameId)
+    callGame(def, "stop", ctx, Match._api)
+    if Match._api and Match._api.ReleaseKeyboard then Match._api:ReleaseKeyboard() end
 
     -- 把攒着没广播的最后一笔 live 刷出去（节流尾包）。
     local meNorm = GL.Roster and GL.Roster:Me() or "self"
@@ -458,8 +559,12 @@ function Match:_Tally()
     local ctx = self._ctx
     if not ctx.isHost then return end
 
+    local def = GL.Games and GL.Games:Get(ctx.gameId)
+    local asc = def and def.scoreOrder == "asc"   -- 低者胜（用时类）；默认降序（高者胜）
     local duration = ctx.duration or 10.0
-    local cap = duration * MAX_CPS   -- 分数上限（> 此值标异常，SPEC 功能 5）
+    -- 分数上限（> 此值标异常，SPEC 功能 5）：优先游戏自报 scoreCap(dur)，否则全局 时长×MAX_CPS。
+    local cap = (def and type(def.scoreCap) == "function" and tonumber(def.scoreCap(duration)))
+        or (duration * MAX_CPS)
 
     -- 收集所有上报分数（只取参与者：在 players 且非围观；host 用 scores 累计的）。
     local rows = {}
@@ -478,13 +583,14 @@ function Match:_Tally()
         end
     end
 
-    -- 降序排名（异常分沉底：不计入冠军）。先按 abnormal（正常在前），再按分数降序。
+    -- 排名（异常分沉底：不计入冠军）。先按 abnormal（正常在前），再按分数：
+    -- 默认降序（高者胜）；scoreOrder="asc" 的游戏（用时/步数类）改升序（低者胜）。
     table.sort(rows, function(a, b)
         if a.abnormal ~= b.abnormal then
             return not a.abnormal   -- 正常的排前
         end
         if a.score ~= b.score then
-            return a.score > b.score
+            if asc then return a.score < b.score else return a.score > b.score end
         end
         return a.name < b.name      -- 稳定：同分按名字
     end)
@@ -663,6 +769,12 @@ end
 ------------------------------------------------------------
 function Match:Close()
     bumpTick()  -- 取消所有挂起定时器
+    -- 关闭前调游戏 teardown()（隐藏画布、停 OnUpdate、清残留）+ 归还键盘——用旧 ctx/api，
+    -- 必须在 ctx 重置为 IDLE、api 清空之前做（契约 §6 / spec §5.3）。teardown 须幂等。
+    local ctx = self._ctx
+    local def = ctx and ctx.gameId and GL.Games and GL.Games:Get(ctx.gameId)
+    if Match._api and Match._api.ReleaseKeyboard then Match._api:ReleaseKeyboard() end
+    callGame(def, "teardown", ctx, Match._api)
     self._ctx = newIdleCtx()
     Match._api = nil
     emit("MATCH_CLOSED")

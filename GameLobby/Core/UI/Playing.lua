@@ -12,6 +12,12 @@ GL.UI = GL.UI or {}
 local theme = GL.UI.theme
 local W = GL.UI.Widgets
 
+-- 取当前比赛对应的游戏 def（用于读 tier / name / scoreUnit 等元数据）。
+local function gameDef(ctx)
+    if ctx and ctx.gameId and GL.Games and GL.Games.Get then return GL.Games:Get(ctx.gameId) end
+    return nil
+end
+
 local function Build(body)
     local s = CreateFrame("Frame", nil, body)
     s._liveRows = {}
@@ -91,6 +97,26 @@ local function Build(body)
     board:SetPoint("RIGHT", s, "RIGHT", -4, 0)
     board:SetPoint("BOTTOM", s, "BOTTOM", 0, 0)
     s._board = board
+
+    ------------------------------------------------------------
+    -- 自绘档画布（canvas-tier 游戏用；默认隐藏，SetMode 切换）
+    -- 占据 castbar 以下整块区域；游戏经 api:Canvas() 拿到它，往里建 Texture/子 Frame。
+    -- 框架在右上角免费给一个分数读出（LIVE_SCORE 驱动），游戏不必自己实现计分显示。
+    ------------------------------------------------------------
+    local canvas = CreateFrame("Frame", nil, s)
+    canvas:SetPoint("TOPLEFT", castbar, "BOTTOMLEFT", 0, -10)
+    canvas:SetPoint("RIGHT", s, "RIGHT", -4, 0)
+    canvas:SetPoint("BOTTOM", s, "BOTTOM", 0, 0)
+    canvas:SetClipsChildren(true)   -- 游戏元素超出画布不外溢
+    W.PanelBG(canvas, "panelInset"); W.MetalBorder(canvas, "thin")
+    local cScore = W.Text(canvas, "mono", theme.font.small or 22, "accentGlow")
+    cScore:SetPoint("TOPRIGHT", canvas, "TOPRIGHT", -10, -8)
+    cScore:SetText("0")
+    W.GlowText(cScore, "accent")
+    canvas._score = cScore
+    canvas:Hide()
+    s._canvas = canvas
+    GL.UI._canvas = canvas
 
     ------------------------------------------------------------
     -- 倒计时遮罩（盖在比赛布局之上，§4.4）
@@ -192,6 +218,24 @@ local function Build(body)
     end
 
     ------------------------------------------------------------
+    -- 布局模式：score 档（hero 三列 + live-board）↔ canvas 档（自绘画布）
+    ------------------------------------------------------------
+    function s:SetMode(tier)
+        local canvasMode = (tier == "canvas")
+        self._hero:SetShown(not canvasMode)
+        self._lbLabel:SetShown(not canvasMode)
+        self._board:SetShown(not canvasMode)
+        self._canvas:SetShown(canvasMode)
+    end
+
+    -- 按当前游戏刷新窗体外观：castbar 标签用游戏名 + 布局模式（score/canvas）。
+    function s:ApplyChrome(ctx)
+        local def = gameDef(ctx)
+        self._castbar:SetLabel((def and def.name) or "比 赛 进 行")
+        self:SetMode(def and def.tier or "score")
+    end
+
+    ------------------------------------------------------------
     -- 计时刷新（OnUpdate 仅本地展示 castbar；剩余秒来自 ctx.remaining，否则本地估算）
     ------------------------------------------------------------
     s._playing = false
@@ -216,7 +260,7 @@ local function Build(body)
         local ctx = GL.Match and GL.Match.GetContext and GL.Match:GetContext()
         s:RenderPrize(ctx)
         s:RenderBoard(ctx)
-        s._castbar:SetLabel((ctx and ctx.gameId == "speedclick") and "极 速 按 键" or "比 赛 进 行")
+        s:ApplyChrome(ctx)   -- 标签 + score/canvas 布局模式
     end
 
     ------------------------------------------------------------
@@ -229,8 +273,9 @@ local function Build(body)
         s._playing = true
         s._smash:SetActive(true)
         s._smash:SetPressedLabel(false)   -- 还原"点击"（上一局可能停在"时间到"）
-        -- 还原 castbar 左标签（上一局 PLAY_END 改成了"结算中…"，再来一局要复位）
-        s._castbar:SetLabel((ctx and ctx.gameId == "speedclick") and "极 速 按 键" or "比 赛 进 行")
+        -- 还原 castbar 左标签（上一局 PLAY_END 改成了"结算中…"）+ 布局模式（score/canvas）
+        s:ApplyChrome(ctx)
+        if s._canvas._score then s._canvas._score:SetText("0") end   -- canvas 分数读出清零
         if s._overlay then s._overlay:Hide() end
         s:RenderPrize(ctx)
         s:RenderBoard(ctx)
@@ -247,6 +292,11 @@ local function Build(body)
     end)
     GL:On("LIVE_SCORE", function(nameNorm, score)
         if nameNorm then s._localScores[nameNorm] = score end
+        -- canvas 模式：右上角分数读出只跟自己的分（免去每个游戏自己画计分）。
+        local me = GL.Roster and GL.Roster.Me and GL.Roster:Me()
+        if nameNorm == me and s._canvas and s._canvas._score then
+            s._canvas._score:SetText(tostring(score))
+        end
         if s:IsShown() then
             local ctx = GL.Match and GL.Match.GetContext and GL.Match:GetContext()
             s:RenderBoard(ctx)
@@ -264,4 +314,12 @@ GL.UI:RegisterScreen("playing", Build)
 ------------------------------------------------------------
 function GL.UI:SmashButton()
     return self._smashButton
+end
+
+------------------------------------------------------------
+-- GL.UI:Canvas() —— 暴露 canvas 档画布 Frame 给游戏 api（契约 §6 / game-dev-spec §5.3）
+-- PlayingScreen 未构建时返回 nil（游戏侧应判空）。
+------------------------------------------------------------
+function GL.UI:Canvas()
+    return self._canvas
 end

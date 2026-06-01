@@ -4,7 +4,7 @@
 > **和 [contracts.md](contracts.md) 的区别**：`contracts.md` 是核心内部多 agent 并行开发的接口冻结文档（满是 owner / 防撞车），**你不需要读它**。本文件只讲「写一款游戏要遵守什么、框架给你什么」。
 > **真相源**：本规范描述的通用游戏契约是 [SPEC.md](../SPEC.md) §5/§6 的泛化（决策见 [requirements.md](../requirements.md) D21）。规范与代码冲突时，以本文件为准并回写代码。
 >
-> **里程碑标注**：本规范是 **M2 目标契约**。M1 的极速按键用的是更窄的「刷分专用」接口（`client/host` + `api:SmashButton()`）；M2 落地通用容器时，极速按键会被迁移到本规范的统一生命周期，并以「是男人就下 100 层」作为首个 canvas 档游戏验证本规范。**M2 落地前，本文件描述的 api 尚未全部存在。**
+> **里程碑标注**：本规范是 **M2 契约**。**通用 canvas 容器地基已落地**（2026-06-01）：统一生命周期 `setup/start/stop/teardown`、`api:Canvas()`/`CaptureKeyboard()`/`GetSeed()`/`SetScore()`/`Finish()`、PlayingScreen 双模式（score/canvas）、元数据驱动排名、无头夹具 canvas/键盘模拟 —— 均已实现并通过无头测试（run_all 7c 冒烟）。极速按键（tier=score）仍走兼容的 `client` 钩子（继续支持，不必迁移）。**本文件描述的 api 现已全部可用**，游戏作者可照此实现。
 > 版本：v0.1（草案）· 日期：2026-06-01
 
 ---
@@ -55,10 +55,10 @@ return {
 
     --==== 元数据：框架据此「通用地」排名/校验/展示（§3 详解）====--
     tier        = "canvas",          -- "score" | "canvas"；默认 "score"
-    endMode     = "elimination",     -- "timed" | "elimination" | "race"
+    endMode     = "timed",           -- "timed" | "elimination" | "race"；本项目上/下100层=timed
     scoreOrder  = "desc",            -- "desc" 高者胜 | "asc" 低者胜（如用时）
     scoreUnit   = "层",              -- UI 显示单位（"次"/"层"/"秒"/"分"）
-    duration    = 60,                -- timed=窗口长度；elimination/race=封顶秒(maxDuration)
+    duration    = 30,                -- timed=窗口长度（上/下100层默认 30s，比时间内层数）
     needsKeyboard = true,            -- 要键盘则声明，框架提前托管焦点
     seeded      = true,              -- 要不要统一随机种子（公平，§4）
     scoreCap    = function(dur) return 100 end,  -- 上限校验：超出此值的上报标「异常」不计冠军
@@ -90,9 +90,11 @@ return {
 
 | 值 | 含义 | 例子 | 框架行为 |
 |----|------|------|---------|
-| `"timed"` | 固定时间窗口，到点全员同时停 | 极速按键 10s | 倒计时结束起 `duration` 秒计时，到点广播停 |
-| `"elimination"` | 各自玩到死，先死先停，分数定格 | 下 100 层 | 你调 `api:Finish()` 上报；全员都 Finish 或到 `maxDuration` 封顶则结算 |
+| `"timed"` | 固定时间窗口，到点全员同时停 | 极速按键 10s、**上/下100层 30s**、打鸭子 10s | 倒计时结束起 `duration` 秒计时，到点广播停 |
+| `"elimination"` | 各自玩到死，先死先停，分数定格 | （本项目暂无；如生存挑战） | 你调 `api:Finish()` 上报；全员都 Finish 或到 `maxDuration` 封顶则结算 |
 | `"race"` | 先达终点者优先 | 限时解谜 | 同 elimination，但 `scoreOrder` 通常配 `asc`（用时短者胜） |
+
+> **本项目当前三款 canvas 游戏全是 `timed`**（上/下100层比固定时间内的层数、打鸭子比 10s 内命中数）——`endMode="timed"` 是最成熟、与框架贴合最好的路径。`elimination`/`race` 框架留了位但暂无游戏用。
 
 ### `scoreOrder` —— 谁是冠军
 
@@ -111,17 +113,18 @@ return {
 
 刷分档无所谓，但**自绘/随机关卡的游戏**（下 100 层的平台布局）如果每个客户端各自随机，「谁下得最深」就没有可比性。
 
-规则：声明 `seeded = true`，框架在 `Start` 广播里下发**全场统一种子**，你用 `api:GetSeed()` 取出来生成关卡：
+规则：声明 `seeded = true`，用 `api:GetSeed()` 取**全场统一种子**生成关卡：
 
 ```lua
 function def.setup(ctx, api)
     local seed = api:GetSeed()          -- 全场一致
     math.randomseed(seed)               -- 之后 math.random() 序列各端相同 → 关卡相同
-    -- ...用 random 生成平台/缺口布局...
+    -- ...用 random 一次性生成平台/缺口布局，存进自己的表...
 end
 ```
 
-> 注意：`math.randomseed` 是全局状态，框架会在 `setup` 前后做隔离约定（M2 落地时明确）。在 `setup` 里一次性生成完关卡数据、别在循环里反复 reseed。
+> **种子怎么来的**（已实现）：`api:GetSeed()` 从 `matchId`（+ 加赛 `round`）**确定性派生**一个数字。`matchId` 经 `Start` 广播各端一致、`round` 经 `Tie`/`Begin` 同步，所以各端 `GetSeed()` 结果天然相同——**不新增协议字段**（守住协议字节级一致，不变量 #4）。同一局每次调返回同一值；加赛换 round → 新布局。
+> 注意：`math.randomseed` 是全局状态，**在 `setup` 里一次性把关卡数据生成完存进自己的表**，别在 OnUpdate 循环里反复 reseed（会和别的代码抢全局 RNG）。
 
 ---
 
@@ -153,29 +156,36 @@ api:SmashButton()     -- 标准比赛屏的「计数大按钮」句柄；挂 OnM
 > ✅ **键盘可行性已真机验证（2026-06-01，时光服 3.80.1.67621）**：非 secure frame 用 `EnableKeyboard(true)` + `OnKeyDown` 能稳定捕获全部按键；在 handler 里 `SetPropagateKeyboardInput(false)` 能**吞掉 WASD/方向键**让角色原地不动；对 `ESCAPE` 单独 `SetPropagateKeyboardInput(true)` 可正常逃逸；`OnUpdate` 逐帧循环流畅。**所以下 100 层这类「方向键控角色」的自绘游戏成立。** 验证方法见 spike 结论附录（下）。
 
 ```lua
-api:Canvas()                    -- 你的根 Frame（已 SetSize/定位在比赛区中央）；往里建 Texture/FontString
-api:CaptureKeyboard(on, keys?)  -- 申请/归还键盘焦点；框架统一处理 SetPropagateKeyboardInput + 退出还原
-                                -- keys 可选：声明你关心的键，框架只吞这些、其余（ESC 等）透传
+api:Canvas()        -- 你的根 Frame（castbar 下方整块区域，已定位/裁剪 SetClipsChildren）；
+                    -- 往里 CreateTexture / CreateFrame 建角色、平台、目标。已就绪后随时调。
+api:CaptureKeyboard(onKeyDown, onKeyUp)  -- 申请键盘；你只给回调，框架托管 propagate + ESC + 归还
+api:ReleaseKeyboard()                    -- 主动归还（一般不用：框架在 stop/teardown 自动归还）
 ```
 
-**为什么键盘要走框架托管**：WoW 里 WASD/方向键默认绑定到角色移动。你若自己 `SetPropagateKeyboardInput(false)` 吞掉按键又忘了还原，会**把玩家锁死在原地**。框架的 `api:CaptureKeyboard` 集中管「比赛开始吞 / 比赛结束还」，并保证 ESC 永远透传（让玩家能逃）。**永远别自己改键位绑定。**
+**`api:CaptureKeyboard` 的实际契约**（已真机验证 + 无头测试覆盖）：你传 `onKeyDown(key)`（必填）和 `onKeyUp(key)`（可选），框架替你装好 `OnKeyDown/OnKeyUp` 并**包办按键透传纪律**：
 
-**验证过的最小模式**（`api:CaptureKeyboard` 内部即按此封装）：
+- 非 ESC 键：框架 `SetPropagateKeyboardInput(false)` 吞掉（→ 不触发默认绑定 → 角色不动），再调你的 `onKeyDown(key)`。
+- `ESCAPE`：框架 `SetPropagateKeyboardInput(true)` 放行（玩家永远能逃），**不**调你的回调。
+- 比赛 `stop`/`teardown` 时框架**自动 ReleaseKeyboard**——即使你的游戏抛错，也保证玩家移动键恢复。
+
+所以你的键盘游戏长这样（不碰 EnableKeyboard / SetPropagateKeyboardInput / 键位绑定）：
 
 ```lua
--- 申请焦点：
-canvas:EnableKeyboard(true)
-canvas:SetScript("OnKeyDown", function(self, key)
-    if key == "ESCAPE" then
-        self:SetPropagateKeyboardInput(true)   -- ESC 永远放行（玩家能逃）
-        api:Finish()                            -- 比如：退出本局
-        return
-    end
-    self:SetPropagateKeyboardInput(false)       -- 吞掉 → 不触发默认绑定 → 角色不动
-    -- ...处理 key（移动游戏角色等）...
-end)
--- 归还焦点（teardown 必做）：canvas:EnableKeyboard(false) + SetPropagateKeyboardInput(true)
+start = function(ctx, api)
+    local cv = api:Canvas()
+    local held = {}
+    api:CaptureKeyboard(
+        function(key) if key == "LEFT" or key == "A" then held.left = true elseif key == "RIGHT" or key == "D" then held.right = true end end,
+        function(key) if key == "LEFT" or key == "A" then held.left = false elseif key == "RIGHT" or key == "D" then held.right = false end end
+    )
+    cv:SetScript("OnUpdate", function(self, dt)
+        -- 用 held + dt 移动角色；按平台/缺口判定层数；api:SetScore(当前层数)
+    end)
+end,
+stop = function(ctx, api) api:Canvas():SetScript("OnUpdate", nil) end,  -- 停循环（键盘框架已自动归还）
 ```
+
+> **画布右上角已有一个免费分数读出**（框架按 LIVE_SCORE 自动刷你自己的分），所以你**不必**自己画「当前层数/命中数」。你只管 `api:SetScore`/`api:AddScore`，数字会自动显示。castbar（顶部）已显示游戏名 + 剩余时间，也不用你画。
 
 ---
 
@@ -233,7 +243,7 @@ def.code = SOURCE      -- 挂回去，供 GL.Import:ExportGame 打包分享
 本机有 Lua 5.1，项目用无头测试夹具 [headless_env.lua](../GameLobby/Tests/headless_env.lua) 模拟 WoW API（Frame/Texture/事件/C_Timer/通讯）。
 
 - 刷分档：现成的 `Tests/run_match.lua` 跑「Start→Join→Begin→倒计时→上报→Final」线路即可套你的游戏。
-- 自绘档：M2 落地时会扩展夹具，模拟 `OnKeyDown`/`OnUpdate`/`Canvas`，让下 100 层这类游戏也能无头跑逻辑（碰撞/计分/Finish 时机）。模拟环境**查不了真机视觉**，视觉只能真机看。
+- 自绘档：夹具已支持 `Canvas`/`EnableKeyboard`/`SetPropagateKeyboardInput`/`SetScript`，并提供 `M.fireScript(frame, "OnUpdate", dt)` / `M.fireScript(frame, "OnKeyDown", "LEFT")` 手动驱动循环与按键，让上/下100层这类游戏能无头跑逻辑（碰撞/计分/层数）。参考 run_all.lua 的 `7c) canvas 档地基` 冒烟段照葫芦画瓢。模拟环境**查不了真机视觉**，视觉只能真机看。
 - 真机调试（时光服屏蔽报错弹窗）：用 `pcall` 把错误打到聊天框——
 
   ```
