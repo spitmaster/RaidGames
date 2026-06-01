@@ -150,6 +150,8 @@ api:SmashButton()     -- 标准比赛屏的「计数大按钮」句柄；挂 OnM
 
 ### 5.3 自绘档专属（`tier="canvas"`）
 
+> ✅ **键盘可行性已真机验证（2026-06-01，时光服 3.80.1.67621）**：非 secure frame 用 `EnableKeyboard(true)` + `OnKeyDown` 能稳定捕获全部按键；在 handler 里 `SetPropagateKeyboardInput(false)` 能**吞掉 WASD/方向键**让角色原地不动；对 `ESCAPE` 单独 `SetPropagateKeyboardInput(true)` 可正常逃逸；`OnUpdate` 逐帧循环流畅。**所以下 100 层这类「方向键控角色」的自绘游戏成立。** 验证方法见 spike 结论附录（下）。
+
 ```lua
 api:Canvas()                    -- 你的根 Frame（已 SetSize/定位在比赛区中央）；往里建 Texture/FontString
 api:CaptureKeyboard(on, keys?)  -- 申请/归还键盘焦点；框架统一处理 SetPropagateKeyboardInput + 退出还原
@@ -157,6 +159,23 @@ api:CaptureKeyboard(on, keys?)  -- 申请/归还键盘焦点；框架统一处�
 ```
 
 **为什么键盘要走框架托管**：WoW 里 WASD/方向键默认绑定到角色移动。你若自己 `SetPropagateKeyboardInput(false)` 吞掉按键又忘了还原，会**把玩家锁死在原地**。框架的 `api:CaptureKeyboard` 集中管「比赛开始吞 / 比赛结束还」，并保证 ESC 永远透传（让玩家能逃）。**永远别自己改键位绑定。**
+
+**验证过的最小模式**（`api:CaptureKeyboard` 内部即按此封装）：
+
+```lua
+-- 申请焦点：
+canvas:EnableKeyboard(true)
+canvas:SetScript("OnKeyDown", function(self, key)
+    if key == "ESCAPE" then
+        self:SetPropagateKeyboardInput(true)   -- ESC 永远放行（玩家能逃）
+        api:Finish()                            -- 比如：退出本局
+        return
+    end
+    self:SetPropagateKeyboardInput(false)       -- 吞掉 → 不触发默认绑定 → 角色不动
+    -- ...处理 key（移动游戏角色等）...
+end)
+-- 归还焦点（teardown 必做）：canvas:EnableKeyboard(false) + SetPropagateKeyboardInput(true)
+```
 
 ---
 
