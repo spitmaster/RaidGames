@@ -17,6 +17,9 @@ local W = GL.UI.Widgets
 
 function GL.UI:Invite(ctx)
     ctx = ctx or {}
+    -- 发起人(host)不弹邀请框：他已亲手发起、且 Match:Start 已把自己设为就绪参与，
+    -- 再问「是否参与比赛？」毫无意义（MATCH_INVITED 在 host 端也会 emit，故在此统一拦截）。
+    if ctx.isHost then return end
     local gameName = "比赛"
     if GL.Games and GL.Games.Get and ctx.gameId then
         local def = GL.Games:Get(ctx.gameId)
