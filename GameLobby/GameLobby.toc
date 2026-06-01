@@ -62,8 +62,7 @@ Core\GameImport.lua
 # --- 点对点游戏推送（P2P 分片传输，D17）---
 Core\Push.lua
 
-# --- 分享：内置整包 WA 串（左上「分享」按钮的数据源）---
-Core\ShareBundle.lua
+# 注：原 Core\ShareBundle.lua（整包核心+游戏 WA 串）已于 2026-06-01 移除（D20，只分享单游戏）。
 
 # --- 游戏（最后；RegisterGame 时核心已就绪）---
 Games\SpeedClick.lua

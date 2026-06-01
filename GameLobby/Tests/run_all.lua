@@ -70,7 +70,6 @@ local loadOrder = {
     "Core/UI/Popups.lua",
     "Core/GameImport.lua",
     "Core/Push.lua",
-    "Core/ShareBundle.lua",
     "Games/SpeedClick.lua",
     "Core/Init.lua",
 }
@@ -120,12 +119,7 @@ end)
 step("日志条 Log", function() GL.UI:Log("sys", "测试日志"); GL.UI:Log("warn", "警告") end)
 step("导入面板 ShowImport/Hide", function() GL.UI:ShowImport(); GL.UI:HideImport() end)
 step("导出面板 ShowExport/Hide", function() GL.UI:ShowExport("测试", "!GL:1!abcdef"); if GL.UI.HideExport then GL.UI:HideExport() end end)
-step("分享整包 GetShareBundle + ShowShare（占位态）", function()
-    local b = GL:GetShareBundle()
-    assert(type(b) == "table" and b.ready == false, "占位串 ready 应为 false")
-    GL.UI:ShowShare()
-    if GL.UI.HideExport then GL.UI:HideExport() end
-end)
+-- 注：整包分享（GetShareBundle/ShowShare）已于 2026-06-01 移除（D20，只分享单游戏）。单游戏导出走 ShowExport（上一步已覆盖）。
 
 -- ============ 4b) PlayerCard 右键推送菜单 ============
 print("== 4b) PlayerCard 右键推送菜单 ==")
