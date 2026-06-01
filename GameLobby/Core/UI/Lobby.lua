@@ -46,11 +46,22 @@ local function Build(body)
     lootCard:SetPoint("RIGHT", s, "RIGHT", 0, 0)
     lootCard:SetPrize({ mode = "friendly" })
     s._lootCard = lootCard
-    -- 团长改奖品 → 通知 Match（缺失时仅本地暂存）
+    -- 团长改自定义文字奖品 → 本地暂存（友谊赛/自定义）。
     lootCard:OnPrizeChanged(function(txt)
         s._customPrize = txt
-        -- 更新 section-label 文案
+        if s._lootPrize then return end   -- 已绑真实战利品时，label 由 OnLoot 管，不被文字覆盖
         if txt and txt:gsub("%s", "") ~= "" then
+            s._prizeLabel:SetLabel("本局奖品 · CUSTOM PRIZE")
+        else
+            s._prizeLabel:SetLabel("比赛模式 · MATCH MODE")
+        end
+    end)
+    -- 团长 Shift+点击物品设为真实战利品（lp=nil 表示清除，回到自定义/友谊赛）。
+    lootCard:OnLoot(function(lp)
+        s._lootPrize = lp
+        if lp then
+            s._prizeLabel:SetLabel("本次战利品 · LOOT IN DISPUTE")
+        elseif s._customPrize and s._customPrize:gsub("%s", "") ~= "" then
             s._prizeLabel:SetLabel("本局奖品 · CUSTOM PRIZE")
         else
             s._prizeLabel:SetLabel("比赛模式 · MATCH MODE")

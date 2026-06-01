@@ -57,13 +57,31 @@ function W.LootCard(parent, isLeaderEditable)
     stat:SetPoint("TOPLEFT", meta, "BOTTOMLEFT", 0, -4); stat:SetJustifyH("LEFT")
     card._stat = stat
 
+    -- 物品品质(0-7) → 稀有度键名；键名 → 中文。供 Shift+点击物品自动识别真实战利品用。
+    local Q2K = { [0] = "common", [1] = "common", [2] = "uncommon", [3] = "rare",
+                  [4] = "epic", [5] = "legendary", [6] = "legendary", [7] = "legendary" }
+    local RNAME = { common = "普通", uncommon = "优秀", rare = "精良", epic = "史诗", legendary = "传说" }
+    -- 解析物品链接 → loot prize 表（GetItemInfo 取品质/图标/类型，取不到则从链接名兜底）。
+    local function parseLoot(link)
+        local name, quality, itype, eqslot, icon
+        if GetItemInfo then
+            local n, _, q, _, _, c, _, _, slot, tex = GetItemInfo(link)
+            name, quality, itype, eqslot, icon = n, q, c, slot, tex
+        end
+        name = name or link:match("%[(.-)%]") or "战利品"
+        local rk = Q2K[quality or 4] or "epic"
+        return { mode = "loot", itemLink = link, name = name, rarity = rk, icon = icon,
+                 type = itype, slot = eqslot, _rarityName = RNAME[rk] }
+    end
+
     -- 自定义奖品输入框（始终构建，:SetEditable 切显隐）—— 防止 ROSTER_CHANGED 切换身份时控件丢失
     card._editable = isLeaderEditable and true or false
     do
         local input = CreateFrame("EditBox", nil, card)
         input:SetPoint("TOPLEFT", iconF, "TOPRIGHT", 14, -4)
         input:SetPoint("RIGHT", card, "RIGHT", -12, 0)
-        input:SetHeight(26); input:SetAutoFocus(false); input:SetMaxLetters(60)
+        -- maxLetters 放宽到 180：物品链接（|cff..|Hitem:..|h[名]|h|r）约 60-120 字符，60 会截断破坏链接。
+        input:SetHeight(26); input:SetAutoFocus(false); input:SetMaxLetters(180)
         W.SetFont(input, "ui", 14, "text")
         local ibg = W.Solid(input, "panel2", 1, "BACKGROUND", -1); ibg:SetAllPoints(input)
         W.MetalBorder(input, "thin"); input:SetTextInsets(8, 8, 0, 0)
@@ -71,20 +89,44 @@ function W.LootCard(parent, isLeaderEditable)
         local meta2 = W.Text(card, "mono", theme.font.tiny, "textMute")
         meta2:SetPoint("TOPLEFT", input, "BOTTOMLEFT", 0, -3); meta2:SetJustifyH("LEFT")
         -- 初始化空状态提示（OnTextChanged 只在变更时触发，新建为空也得有引导文案）
-        meta2:SetText("留空则为友谊赛 · 仅为娱乐   0/60")
+        meta2:SetText("打字写奖品 / Shift+点击物品设为战利品 · 留空=友谊赛   0/60")
         card._inputMeta = meta2
 
         input:SetScript("OnTextChanged", function(s)
-            local txt = s:GetText()
+            local txt = s:GetText() or ""
+            -- 含物品链接 → 真实战利品（自动取稀有度/图标）。
+            local link = txt:match("(|c%x+|Hitem:.-|h.-|h|r)")
+            if link then
+                local lp = parseLoot(link)
+                card._inputMeta:SetText("战利品 · " .. (lp._rarityName or "") .. "   （清空文本可取消）")
+                if card._onLoot then card._onLoot(lp) end
+                return
+            end
+            -- 普通文字 → 自定义奖品 / 友谊赛。
             local len = strlenutf8 and strlenutf8(txt) or #txt
             local has = (txt:gsub("%s", "")) ~= ""
             card._inputMeta:SetText(string.format("%s   %d/60",
-                has and "团长设置 · 团员可见" or "留空则为友谊赛 · 仅为娱乐", len))
+                has and "团长设置 · 团员可见" or "打字写奖品 / Shift+点击物品 · 留空=友谊赛", len))
+            if card._onLoot then card._onLoot(nil) end           -- 退出战利品态
             if card._onPrizeChanged then card._onPrizeChanged(txt) end
         end)
         input:SetScript("OnEscapePressed", function(s) s:ClearFocus() end)
         input:SetScript("OnEnterPressed",  function(s) s:ClearFocus() end)
+        input:SetScript("OnEditFocusGained", function(s) GL.UI._lootInput = s end)
         card._input = input
+
+        -- Shift+点击背包/拾取物品：把链接塞进当前聚焦的奖品框。WoW 在我们的 EditBox 聚焦时，
+        -- ChatEdit_InsertLink 默认不往非聊天框插入；hooksecurefunc 在原函数之后补一刀。
+        if _G.hooksecurefunc and _G.ChatEdit_InsertLink and not GL.UI._lootLinkHooked then
+            GL.UI._lootLinkHooked = true
+            hooksecurefunc("ChatEdit_InsertLink", function(link)
+                local box = GL.UI._lootInput
+                if box and box.HasFocus and box:HasFocus() and link and link ~= "" then
+                    box:SetText(link)                            -- 整框设为链接 → OnTextChanged 识别成战利品
+                    if box.SetCursorPosition then box:SetCursorPosition(box:GetText():len()) end
+                end
+            end)
+        end
     end
 
     -- 内部：三态渲染分发
@@ -167,5 +209,7 @@ function W.LootCard(parent, isLeaderEditable)
     end
 
     function card:OnPrizeChanged(fn) self._onPrizeChanged = fn end
+    -- 选中真实战利品（Shift+点击物品）时回调 fn(lootPrize)；清空文本退出战利品态时回调 fn(nil)。
+    function card:OnLoot(fn) self._onLoot = fn end
     return card
 end

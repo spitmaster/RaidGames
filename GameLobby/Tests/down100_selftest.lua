@@ -95,10 +95,10 @@ step("advance 过倒计时 → PLAYING + setup/start 被调", function()
     assert(G and G.hero, "setup 未建角色")
     assert(G.plats and #G.plats > 0, "平台池未建")
     assert(G.running == true, "start 未挂 OnUpdate")
-    -- 至少有一块带刺平台（关卡含刺）
-    local hasSpike = false
-    for _, p in ipairs(G.plats) do if p.spiked then hasSpike = true end end
-    assert(hasSpike, "关卡应含带刺平台")
+    -- 带刺标记字段存在（具体某局初始 8 块是否含刺取决于种子，刺主要在平台回收时出现；
+    -- 不在此做种子敏感断言，带刺秒杀逻辑由「落刺即死」场景 + 真机验证）。
+    assert(type(G.plats[1].spiked) == "boolean", "平台应有 spiked 标记字段")
+    assert(type(G.nextSpike) == "function", "应有 nextSpike 生成器")
 end)
 
 step("按键 → 角色左右移动", function()
@@ -161,6 +161,23 @@ step("被顶到画布顶部 → 死亡", function()
     assert(G.dead == true, "出顶应触发死亡")
     env.advance(2)
     GL.Match:Close()
+end)
+
+step("落到带刺平台 → 死亡（带刺秒杀逻辑）", function()
+    GL.Match:Start("down100", { prize = { mode = "friendly" } })
+    env.advance(5)
+    local ctx = GL.Match:GetContext()
+    local G = ctx._d100
+    local cv = GL.Match._api:Canvas()
+    G.dead = false; G.rest = nil
+    G.heroY = G.H * 0.4
+    local p = G.plats[1]
+    p.spiked = true; p.gapX = 9999          -- 缺口移出 → 角色必落在实心（带刺）上
+    p.y = G.heroY + G.CHAR_SZ + 4
+    G.heroX = 50; G.vy = 120
+    env.fireScript(cv, "OnUpdate", 0.05)
+    assert(G.dead == true, "落到带刺平台应死亡")
+    env.advance(2); GL.Match:Close()
 end)
 
 -- ===== 围观者分支 =====
