@@ -1,20 +1,23 @@
--- GameLobby/Tests/up100_selftest.lua
--- 「是男人就上 100 层」(up100) 独立无头自测（elimination 版）。
--- 运行（仓库根）：lua GameLobby/Tests/up100_selftest.lua  → exit 0 全过。
+-- GameLobby/Tests/dino_selftest.lua
+-- 小恐龙跳一跳（dino）独立无头自测（elimination 版）：
+--   注册 dino → 单人 Start → 进 PLAYING → 跳跃（vy/jumpH 变化）→ 跑动计分（dist/score）→
+--   强制撞障碍触发死亡 → 断言立即出局结算 → 围观者早退。
+-- 运行（仓库根）：lua GameLobby/Tests/dino_selftest.lua  ·  exit 0 = 通过。
 
 local env = dofile("GameLobby/Tests/headless_env.lua")
 
 local errs = {}
 local function step(name, fn)
     local ok, err = xpcall(fn, debug.traceback)
-    if ok then print("  [PASS] " .. name)
+    if ok then print(string.format("  [PASS] %s", name))
     else
-        print("  [FAIL] " .. name)
+        print(string.format("  [FAIL] %s", name))
         print("         " .. (tostring(err):match("[^\n]*") or tostring(err)))
         table.insert(errs, { name = name, err = err })
     end
 end
 
+-- ===== 库桩（同 run_all）=====
 dofile("GameLobby/Libs/LibStub/LibStub.lua")
 dofile("GameLobby/Libs/LibBase64/LibBase64.lua")
 do
@@ -42,10 +45,10 @@ local loadOrder = {
     "Core/UI/About.lua", "Core/UI/ImportPanel.lua", "Core/UI/ExportPanel.lua", "Core/UI/Popups.lua",
     "Core/GameImport.lua", "Core/Push.lua",
     "Games/SpeedClick.lua",
-    "Games/Up100.lua",
+    "Games/Dino.lua",      -- 被测游戏
     "Core/Init.lua",
 }
-print("== 1) 加载插件 + Up100 ==")
+print("== 1) 加载插件 + Dino ==")
 for _, rel in ipairs(loadOrder) do
     step("load " .. rel, function() assert(loadfile("GameLobby/" .. rel))() end)
 end
@@ -57,95 +60,94 @@ print("== 2) 引导 flush ==")
 step("PLAYER_LOGIN flush", function() env.FireEvent("PLAYER_LOGIN", true, false) end)
 step("PLAYER_ENTERING_WORLD", function() env.FireEvent("PLAYER_ENTERING_WORLD", true, false) end)
 
-print("== 3) up100 注册（elimination 真实版）==")
-step("up100 已注册、tier=canvas、endMode=elimination、有 code", function()
-    local def = GL.Games:Get("up100")
-    assert(def, "up100 未注册")
-    assert(def.locked ~= true, "应已非占位")
+print("== 3) dino 注册（elimination 真实版）==")
+step("dino 已注册、tier=canvas、endMode=elimination、有 code", function()
+    local def = GL.Games:Get("dino")
+    assert(def, "dino 未注册")
+    assert(def.locked ~= true, "应可发起")
     assert(def.tier == "canvas", "tier 应为 canvas")
     assert(def.endMode == "elimination", "endMode 应为 elimination，实际: " .. tostring(def.endMode))
+    assert(def.needsKeyboard == true, "needsKeyboard 应为 true")
+    assert(def.seeded == true, "seeded 应为 true")
     assert(def.code and def.code:sub(1, 6) == "return", "def.code 应为自包含 SOURCE")
 end)
-step("up100 可导出（!GL: 串）", function()
-    local s, r = GL.Import:ExportGame("up100")
+step("dino 可导出（!GL: 串）", function()
+    local s, r = GL.Import:ExportGame("dino")
     assert(type(s) == "string" and s:sub(1, 4) == "!GL:", "导出失败: " .. tostring(r))
 end)
 
-print("== 4) 单人跑一局（含坠落立即结束）==")
+-- ===== 单人模式 =====
+print("== 4) 单人跑一局（含撞死立即结束）==")
 env.state.inGroup = false; env.state.inRaid = false; env.state.isLeader = false
 env.state.members = { { name = "Tester", classFile = "WARRIOR", online = true } }
 env.FireEvent("GROUP_ROSTER_UPDATE")
 GL.UI:Show()
 
-step("Start up100 → COUNTDOWN", function()
-    GL.Match:Start("up100", { prize = { mode = "friendly" } })
+local ctxRef
+step("Start dino → COUNTDOWN", function()
+    GL.Match:Start("dino", { prize = { mode = "friendly" } })
     local p = GL.Match:GetContext().phase
     assert(p == "COUNTDOWN" or p == "PLAYING", "实际: " .. tostring(p))
 end)
 
 step("advance 过倒计时 → PLAYING + setup/start 被调", function()
     env.advance(5)
-    local ctx = GL.Match:GetContext()
-    assert(ctx.phase == "PLAYING", "应 PLAYING，实际: " .. tostring(ctx.phase))
-    local G = GL.Match._api.G
-    assert(G and G.charTex, "setup 未建角色")
-    assert(G.layers and #G.layers > 0, "层序列未建")
-    assert(GL.Match._api:Canvas():GetScript("OnUpdate"), "start 未挂 OnUpdate")
-    local hasSpike = false
-    for _, L in ipairs(G.layers) do if L.hasSpike then hasSpike = true end end
-    assert(hasSpike, "关卡应含带刺平台")
+    ctxRef = GL.Match:GetContext()
+    assert(ctxRef.phase == "PLAYING", "应 PLAYING，实际: " .. tostring(ctxRef.phase))
+    local G = ctxRef._dino
+    assert(G and G.dino, "setup 未建恐龙")
+    assert(G.obs and #G.obs > 0, "障碍池未建")
+    assert(G.running == true, "start 未挂 OnUpdate")
 end)
 
-step("按键 → 角色左右移动", function()
+step("按跳跃键 → 离地（jumpH>0）", function()
     local cv = GL.Match._api:Canvas()
-    local G = GL.Match._api.G
-    local x0 = G.charX
-    env.fireScript(cv, "OnKeyDown", "RIGHT")
-    for _ = 1, 4 do env.fireScript(cv, "OnUpdate", 0.04) end
-    env.fireScript(cv, "OnKeyUp", "RIGHT")
-    assert(G.charX > x0, "按右键角色应右移")
-end)
-
-step("正常跑帧 → 弹跳/计分不抛错，maxTier≥1", function()
-    local cv = GL.Match._api:Canvas()
-    local G = GL.Match._api.G
-    for _ = 1, 30 do env.fireScript(cv, "OnUpdate", 0.03) end   -- 可能中途自然死亡，不抛错即可
-    assert(type(G.maxTier) == "number" and G.maxTier >= 1, "maxTier 非法: " .. tostring(G.maxTier))
-    assert(GL.Match._api:GetScore() == G.maxTier - 1, "分应等于 maxTier-1")
-    GL.Match:Close()
-end)
-
-step("坠出画布底部 → 死亡检测 → 立即出局结算（全新一局）", function()
-    GL.Match:Start("up100", { prize = { mode = "friendly" } })
-    env.advance(5)   -- 进 PLAYING（OnUpdate 活着）
-    local cv = GL.Match._api:Canvas()
-    local G = GL.Match._api.G
-    G.dead = false
-    G.charWorldY = -1000             -- 远低于所有平台 → 无落脚、投影到画布底以下 → 坠落死
-    G.vy = -50
+    local G = ctxRef._dino
+    G.jumpH = 0; G.vy = 0; G.ducking = false
+    env.fireScript(cv, "OnKeyDown", "UP")
     env.fireScript(cv, "OnUpdate", 0.05)
-    assert(G.dead == true, "坠出底部应触发死亡")
+    assert(G.jumpH > 0, "起跳后 jumpH 应 >0，实际: " .. tostring(G.jumpH))
+end)
+
+step("跑动 → 距离/分数增长", function()
+    local cv = GL.Match._api:Canvas()
+    local G = ctxRef._dino
+    local d0 = G.dist
+    for _ = 1, 10 do env.fireScript(cv, "OnUpdate", 0.03) end
+    assert(G.dist > d0, "跑动后 dist 应增长")
+    assert(GL.Match._api:GetScore() == math.floor(G.dist / 12), "分数应等于 floor(dist/12)")
+end)
+
+step("撞障碍 → 死亡检测触发 → 立即出局结算", function()
+    local cv = GL.Match._api:Canvas()
+    local G = ctxRef._dino
+    G.dead = false; G.jumpH = 0; G.vy = 0; G.ducking = false
+    for i = 1, #G.obs do G.obs[i].active = false end
+    local o = G.obs[1]
+    o.active = true; o.kind = "cactus"; o.w = 30; o.h = 44; o.groundOffset = 0; o.x = G.DINO_X
+    env.fireScript(cv, "OnUpdate", 0.03)
+    assert(G.dead == true, "撞障碍应触发死亡")
     env.advance(2)
     local p = GL.Match:GetContext().phase
     assert(p == "RESULTS" or p == "IDLE", "死亡后应立即结算，phase=" .. tostring(p))
-    GL.Match:Close()
 end)
 
+step("Close 不抛错", function() GL.Match:Close(); assert(true) end)
+
+-- ===== 围观者分支 =====
 print("== 5) 围观者不绑输入 ==")
 step("围观者 start 直接 return（不挂 OnUpdate）", function()
-    local def = GL.Games:Get("up100")
+    local def = GL.Games:Get("dino")
     local fakeCanvas = GL.UI:Canvas()
     fakeCanvas:SetScript("OnUpdate", nil)
     local fakeApi = {
-        G = nil,
         IsSpectator = function() return true end,
         Canvas = function() return fakeCanvas end,
         CaptureKeyboard = function() error("围观者不应申请键盘") end,
         SetScore = function() error("围观者不应计分") end,
-        GetSeed = function() return 1 end,
         Random = function(_, a, b) return a or 0 end,
     }
-    def.start({}, fakeApi)
+    def.start({ _dino = {} }, fakeApi)
     assert(fakeCanvas:GetScript("OnUpdate") == nil, "围观者不应挂 OnUpdate")
 end)
 

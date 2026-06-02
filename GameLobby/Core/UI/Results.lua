@@ -63,6 +63,23 @@ local function Build(body)
     awText:SetPoint("CENTER")
     s._awardText = awText
 
+    -- 战利品超链接：所有人都能在结算屏把鼠标移到物品上看 tooltip，Shift+点击塞进聊天框
+    -- （等同背包 Shift+点击物品的效果）。靠 award 帧承载 awText 里的 |Hitem:..|h 链接。
+    award:EnableMouse(true)
+    if award.SetHyperlinksEnabled then award:SetHyperlinksEnabled(true) end
+    award:SetScript("OnHyperlinkClick", function(_, link, text, button)
+        if _G.SetItemRef then SetItemRef(link, text, button) end   -- 内置：左键开 tooltip / Shift 左键进聊天框
+    end)
+    award:SetScript("OnHyperlinkEnter", function(self_, link)
+        if not _G.GameTooltip then return end
+        GameTooltip:SetOwner(self_, "ANCHOR_BOTTOM")
+        GameTooltip:SetHyperlink(link)
+        GameTooltip:Show()
+    end)
+    award:SetScript("OnHyperlinkLeave", function()
+        if _G.GameTooltip then GameTooltip:Hide() end
+    end)
+
     ------------------------------------------------------------
     -- ③ final-board
     ------------------------------------------------------------
@@ -121,10 +138,10 @@ local function Build(body)
         local wscore = winnerEntry and winnerEntry.score or 0
         self._winScore:SetFormattedText("以 %d 次按键%s", wscore, hasPrize and "夺得奖品" or "技压全场")
 
-        -- 归属条三态
+        -- 归属条三态。loot 态优先用真实 itemLink（带 |Hitem:..|h，可悬停看 tooltip / Shift+点击进聊天框）。
         if prize.mode == "loot" then
             self._awardText:SetText(string.format("战 利 品 已 归 属    %s    →    %s",
-                prize.name or prize.itemLink or "战利品", winnerName or "—"))
+                prize.itemLink or prize.name or "战利品", winnerName or "—"))
         elseif prize.mode == "custom" and prize.text and prize.text ~= "" then
             self._awardText:SetText(string.format("奖 品 已 归 属    %s    →    %s",
                 prize.text, winnerName or "—"))
@@ -181,10 +198,20 @@ local function Build(body)
             players = ctx.players, duration = ctx.duration, gameId = ctx.gameId,
         }
         -- 写一条可点击的结果日志：回大厅后可见，点击重开本结算窗口看排名。
+        -- 战利品直接嵌进通告（itemLink 渲染成彩色物品名；LogStrip 支持悬停 tooltip / Shift+点击进聊天框）。
         local rk = ctx.ranking and ctx.ranking[1]
         local wname = ctx.winner or (rk and rk.name) or "—"
         local wscore = rk and rk.score or 0
-        GL.UI:Log("raid", string.format("本场结果：%s 夺冠（%d）· 点击查看排名", wname, wscore), function()
+        local prize = ctx.prize or {}
+        local awardStr
+        if prize.mode == "loot" and (prize.itemLink or prize.name) then
+            awardStr = "夺得 " .. (prize.itemLink or prize.name)
+        elseif prize.mode == "custom" and prize.text and prize.text ~= "" then
+            awardStr = "夺得 " .. prize.text
+        else
+            awardStr = "夺冠"
+        end
+        GL.UI:Log("raid", string.format("本场结果：%s %s（%d 分）· 点击查看排名", wname, awardStr, wscore), function()
             GL.UI:Show(); GL.UI:ShowScreen("results")
         end)
     end)

@@ -2,15 +2,19 @@
 -- owner: wow-addon-engineer
 --
 -- 玩法（玩到死，比下降层数）：
---   平台一排排恒定向上滚动；角色站在平台上会被平台「托着一起上移」（骑乘）。
---   玩家按 方向键/AD 左右移动，对准平台缺口让角色坠到下一层；每下一层 = 层数 +1。
---   死亡（立即出局、分定格）：①被平台托到画布顶部（出顶）②坠出画布底部 ③落到带刺平台（红色）。
---   平台稀疏（间距大），且约三成平台带刺 → 更容易摔死。endMode=elimination：
---   单人死即结算；多人各自死，全员死或到 maxDuration 结算，下降层数多者胜。
+--   一行行平台恒定向上滚动；角色站在「安全平台」上会被它托着一起上移（骑乘）。
+--   按 方向键/AD 左右移动，走出平台边缘 → 坠到下一行的安全平台；每落到一块新的安全平台 = 层数 +1。
+--   死亡：①被托到画布顶被夹死 ②坠出画布底 ③落到带刺平台（扎死）。速度由慢到快（像断网恐龙）。
 --
--- 不变量 #2（解耦）：只走 api（SetScore/Finish/Canvas/CaptureKeyboard/Random/IsSpectator），绝不发通讯。
--- 公平（§4）：setup 里用 api:Random（框架确定性随机；WoW 无 math.randomseed）生成关卡，各端一致。
--- 自包含（§6）：def 本体写在 SOURCE，只用 ctx/api/全局/自身 local，绝不引用 SOURCE 外 upvalue。
+-- 行的两种类型（关键设计）：
+--   · 安全行：一块较窄的安全平台（蓝），可落脚。
+--   · 带刺行：只有一块带刺平台（红+三角刺）+ 大片空隙，**没有安全落脚点** → 必须从空隙穿过去（更难）。
+--
+-- 可解性保证（绝不无法继续，难但能通关）：
+--   ★ 相邻安全行水平距离 ≤ reachX（一次下落够得着）。
+--   ★ 禁止连续两行带刺；带刺行的刺**放在远离下落路径的一侧**（band 之外）→ 沿安全链直落必能绕开。
+--
+-- 不变量 #2（解耦）：只走 api。公平（§4）：用 api:Random 按种子生成。自包含（§6）：def 在 SOURCE 内。
 
 local self = aura_env or {}
 
@@ -19,30 +23,28 @@ return {
     --==== 身份 ====--
     id        = "down100",
     name      = "是男人就下 100 层",
-    version   = "1.1.0",                    -- 独立版本门控；改版本同步改这里（高版本胜，替换占位）
+    version   = "1.5.0",
     glyph     = "Interface\\Icons\\Ability_Rogue_Sprint",
-    descLines = { "踩平台往下，越深越高", "撞刺/出顶/坠底即死" },
+    descLines = { "踩平台往下，越深越高", "刺行无落脚，须穿空隙" },
 
-    --==== 元数据（框架据此通用排名/校验/展示）====--
+    --==== 元数据 ====--
     tier        = "canvas",
-    endMode     = "elimination",             -- 玩到死：撞刺/被顶出/坠落 → 立即出局，分定格在已下层数
+    endMode     = "elimination",
     scoreOrder  = "desc",
     scoreUnit   = "层",
-    duration    = 60,                        -- maxDuration 兜底（一般撑不到；没死满 60s 也强制结算）
+    duration    = 30,                        -- maxDuration（一般撑不到；越往后越快）
     needsKeyboard = true,
     seeded      = true,
-    scoreCap    = function() return 999 end, -- 仅防离谱上报
+    scoreCap    = function() return 999 end,
     locked      = false,
 
     --==== 生命周期 ====--
 
-    -- setup：建画布元素（角色 + 稀疏平台对象池，约三成带刺）、用种子生成关卡，但别动。
     setup = function(ctx, api)
         local cv = api:Canvas()
         if not cv then return end
-
         local G = {}
-        ctx._d100 = G                          -- 私有命名空间，不写 ctx 框架字段
+        ctx._d100 = G
 
         local W = (cv.GetWidth and cv:GetWidth()) or 720
         local H = (cv.GetHeight and cv:GetHeight()) or 460
@@ -50,59 +52,139 @@ return {
         if not H or H <= 0 then H = 460 end
         G.W, G.H = W, H
 
-        -- ===== 关卡参数（稀疏：行距大、平台少）=====
-        local ROW_GAP   = 150                  -- 相邻平台行竖直间距（大 → 稀疏 → 更易摔死）
-        local GAP_W     = 80                   -- 平台缺口宽度（角色 18 宽）
-        local PLAT_H    = 12
-        local CHAR_SZ   = 18
-        local NUM_PLAT  = 8                     -- 平台对象池（H 内只铺得下 ~3 行，余量回收）
-        local SPIKE_PCT = 28                   -- 带刺平台占比（%）
-        G.ROW_GAP, G.GAP_W, G.PLAT_H, G.CHAR_SZ, G.SPIKE_PCT = ROW_GAP, GAP_W, PLAT_H, CHAR_SZ, SPIKE_PCT
+        -- ===== 关卡参数 =====
+        local ROW_GAP     = 120
+        local SAFE_W_MIN, SAFE_W_MAX = 48, 74     -- 安全平台偏窄 → 落脚要更准
+        local SPIKE_W_MIN, SPIKE_W_MAX = 80, 140  -- 带刺平台偏宽 → 更显眼、更凶
+        local PLAT_H      = 12
+        local CHAR_SZ     = 18
+        local NUM_PLAT    = 8
+        local SPIKE_PCT   = 42                     -- 带刺行占比（%）
+        local reachX      = 90                     -- 相邻安全行水平最大偏移（按最快上滚留余量）
+        local skipReach   = 72                     -- 跨过一行刺时，下一安全行离上一安全行的偏移（小→近直落）
+        local MARGIN      = 14
+        local SBW, SBH, LAYERS = 16, 12, 5
+        G.ROW_GAP, G.PLAT_H, G.CHAR_SZ, G.SPIKE_PCT = ROW_GAP, PLAT_H, CHAR_SZ, SPIKE_PCT
 
-        -- 缺口 x（种子确定 → 各端一致）。
-        local maxGapX = W - GAP_W
-        if maxGapX < 0 then maxGapX = 0 end
-        G.nextGapX  = function() return api:Random(0, maxGapX) end
         G.nextSpike = function() return api:Random(1, 100) <= SPIKE_PCT end
 
-        -- ===== 平台对象池（复用 Texture）=====
-        -- 每行 = 左段 + 右段（中间缺口）。带刺平台整行染红，落上即死。
+        -- ===== 生成一行（可解性核心，见 sim 验证）=====
+        G.lastSafeX = (W - 110) * 0.5
+        G.rowsSinceSafe = 0
+        G.genRow = function(p, forceSafe)
+            local makeSpike = (not forceSafe) and (G.rowsSinceSafe == 0) and G.nextSpike()
+            if makeSpike then
+                p.spikeW = api:Random(SPIKE_W_MIN, SPIKE_W_MAX)
+                -- 下落时角色可能占据的水平 band（沿安全链直落）；刺放到 band 之外的一侧。
+                local bandLo = G.lastSafeX - skipReach - CHAR_SZ
+                local bandHi = G.lastSafeX + skipReach + SAFE_W_MAX + CHAR_SZ
+                local rightLo = bandHi + MARGIN
+                local rightHi = W - p.spikeW
+                local leftHi  = bandLo - MARGIN - p.spikeW
+                local canR = rightLo <= rightHi
+                local canL = leftHi >= 0
+                if canR and canL then
+                    if (rightHi - rightLo) >= leftHi then p.spikeX = api:Random(math.ceil(rightLo), rightHi)
+                    else p.spikeX = api:Random(0, math.floor(leftHi)) end
+                elseif canR then p.spikeX = api:Random(math.ceil(rightLo), rightHi)
+                elseif canL then p.spikeX = api:Random(0, math.floor(leftHi))
+                else makeSpike = false end       -- 画布太窄放不下 → 退化成安全行
+            end
+            if makeSpike then
+                p.hasSpike = true; p.safeW = 0    -- 带刺行：无安全落脚点
+                G.rowsSinceSafe = G.rowsSinceSafe + 1
+            else
+                p.hasSpike = false
+                p.safeW = api:Random(SAFE_W_MIN, SAFE_W_MAX)
+                local span = (G.rowsSinceSafe == 0) and reachX or skipReach
+                local maxX = W - p.safeW; if maxX < 0 then maxX = 0 end
+                local lo = G.lastSafeX - span; if lo < 0 then lo = 0 end
+                local hi = G.lastSafeX + span; if hi > maxX then hi = maxX end
+                if hi < lo then hi = lo end
+                p.safeX = api:Random(math.floor(lo), math.floor(hi))
+                G.lastSafeX = p.safeX; G.rowsSinceSafe = 0
+            end
+        end
+
+        -- ===== 对象池 =====
+        local maxSpikes = math.ceil(SPIKE_W_MAX / SBW)
         G.plats = {}
         for i = 1, NUM_PLAT do
-            local left  = cv:CreateTexture(nil, "ARTWORK")
-            local right = cv:CreateTexture(nil, "ARTWORK")
-            G.plats[i] = { left = left, right = right, y = 0, gapX = 0, spiked = false, _passed = false }
+            local safeTex  = cv:CreateTexture(nil, "ARTWORK")
+            local spikeTex = cv:CreateTexture(nil, "ARTWORK")
+            local spikes = {}
+            for s = 1, maxSpikes do
+                local layers = {}
+                for k = 1, LAYERS do
+                    local t = cv:CreateTexture(nil, "OVERLAY")
+                    t:SetColorTexture(0.93, 0.93, 0.97, 1)
+                    t:Hide(); layers[k] = t
+                end
+                spikes[s] = layers
+            end
+            G.plats[i] = { safeTex = safeTex, spikeTex = spikeTex, spikes = spikes,
+                           y = 0, safeX = 0, safeW = 0, spikeX = 0, spikeW = 0,
+                           hasSpike = false, _landed = false }
         end
 
-        -- 放置一行：y = 该行顶距画布顶（向下为正）。带刺=红，普通=蓝。
         G.placeRow = function(p)
-            local gapX = p.gapX
-            local lw = gapX
-            local rw = W - (gapX + GAP_W)
-            if lw < 0 then lw = 0 end
-            if rw < 0 then rw = 0 end
-            local r, g, b = 0.45, 0.62, 0.85
-            if p.spiked then r, g, b = 0.90, 0.22, 0.16 end   -- 带刺平台：醒目红
-            local L, R = p.left, p.right
-            L:ClearAllPoints(); R:ClearAllPoints()
-            if lw > 0 then
-                L:SetColorTexture(r, g, b, 1); L:SetSize(lw, PLAT_H)
-                L:SetPoint("TOPLEFT", cv, "TOPLEFT", 0, -p.y); L:Show()
-            else L:Hide() end
-            if rw > 0 then
-                R:SetColorTexture(r, g, b, 1); R:SetSize(rw, PLAT_H)
-                R:SetPoint("TOPLEFT", cv, "TOPLEFT", gapX + GAP_W, -p.y); R:Show()
-            else R:Hide() end
+            if p.safeW and p.safeW > 0 then
+                local s = p.safeTex
+                s:ClearAllPoints(); s:SetColorTexture(0.45, 0.62, 0.85, 1); s:SetSize(p.safeW, PLAT_H)
+                s:SetPoint("TOPLEFT", cv, "TOPLEFT", p.safeX, -p.y); s:Show()
+            else
+                p.safeTex:Hide()
+            end
+            if p.hasSpike then
+                local r = p.spikeTex
+                r:ClearAllPoints(); r:SetColorTexture(0.45, 0.13, 0.11, 1); r:SetSize(p.spikeW, PLAT_H)
+                r:SetPoint("TOPLEFT", cv, "TOPLEFT", p.spikeX, -p.y); r:Show()
+                local nSp = math.floor(p.spikeW / SBW); if nSp < 1 then nSp = 1 end
+                local layerH = SBH / LAYERS
+                for si = 1, #p.spikes do
+                    local spike = p.spikes[si]
+                    if si <= nSp then
+                        local cx = p.spikeX + (si - 0.5) * SBW
+                        for k = 0, LAYERS - 1 do
+                            local lw = SBW * (LAYERS - k) / LAYERS
+                            if lw < 1 then lw = 1 end
+                            local t = spike[k + 1]
+                            t:ClearAllPoints(); t:SetSize(lw, layerH + 0.6)
+                            t:SetPoint("TOPLEFT", cv, "TOPLEFT", cx - lw * 0.5, -(p.y - (k + 1) * layerH))
+                            t:Show()
+                        end
+                    else
+                        for k = 1, LAYERS do spike[k]:Hide() end
+                    end
+                end
+            else
+                p.spikeTex:Hide()
+                for si = 1, #p.spikes do for k = 1, #p.spikes[si] do p.spikes[si][k]:Hide() end end
+            end
         end
 
-        -- 初始铺一串平台（第一行不带刺，给角色安全落脚）。
-        local startY = H * 0.42
+        -- ===== 初始铺行：起始行靠近屏幕底部（上方缓冲），上方行为安全行，下方行混入带刺行 =====
+        local startY = H * 0.12
+        local heroIdx = 1
+        for i = 1, NUM_PLAT do
+            if startY + (i - 1) * ROW_GAP <= H - 80 then heroIdx = i end
+        end
+        if heroIdx > NUM_PLAT - 2 then heroIdx = NUM_PLAT - 2 end
+        if heroIdx < 1 then heroIdx = 1 end
+        G.heroIdx = heroIdx
         for i = 1, NUM_PLAT do
             local p = G.plats[i]
-            p.gapX   = G.nextGapX()
-            p.spiked = (i > 1) and G.nextSpike() or false
-            p.y      = startY + (i - 1) * ROW_GAP
-            p._passed = false
+            if i == heroIdx then
+                p.hasSpike = false; p.safeW = 110; p.safeX = (W - p.safeW) * 0.5; p._landed = true
+                G.lastSafeX = p.safeX; G.rowsSinceSafe = 0
+            elseif i < heroIdx then
+                G.genRow(p, true)                 -- 上方行：安全（装饰）
+                p._landed = true
+            else
+                G.genRow(p, i == heroIdx + 1)      -- 下方行：可带刺；紧邻 hero 的一行强制安全起步
+                p._landed = false
+            end
+            p.y = startY + (i - 1) * ROW_GAP
             G.placeRow(p)
         end
 
@@ -111,8 +193,9 @@ return {
         hero:SetColorTexture(1.0, 0.82, 0.25, 1)
         hero:SetSize(CHAR_SZ, CHAR_SZ)
         G.hero = hero
-        G.heroX = (W - CHAR_SZ) * 0.5
-        G.heroY = H * 0.18                     -- 起点稍高于第一行，落下即站稳
+        local hp = G.plats[heroIdx]
+        G.heroX = hp.safeX + (hp.safeW - CHAR_SZ) * 0.5
+        G.heroY = hp.y - CHAR_SZ
         G.vy    = 0
         G.placeHero = function()
             hero:ClearAllPoints()
@@ -120,22 +203,20 @@ return {
         end
         G.placeHero()
 
-        -- ===== 死亡提示文字（居中，初始隐藏）=====
         local dtext = cv:CreateFontString(nil, "OVERLAY", "GameFontNormalHuge")
         dtext:SetPoint("CENTER", cv, "CENTER", 0, 0)
         dtext:SetTextColor(1.0, 0.35, 0.25)
         dtext:Hide()
         G.deathText = dtext
 
-        -- ===== 物理 / 计分态 =====
-        G.depth    = 0
-        G.held     = { left = false, right = false }
-        G.rest     = nil        -- 当前所踩平台（骑乘上移）；nil=自由下落
-        G.dead     = false
-        G.running  = false
+        G.depth   = 0
+        G.elapsed = 0
+        G.held    = { left = false, right = false }
+        G.rest    = G.plats[heroIdx]
+        G.dead    = false
+        G.running = false
     end,
 
-    -- start：申请键盘 + 开 OnUpdate。围观者不绑输入、不跑逻辑。
     start = function(ctx, api)
         if api:IsSpectator() then return end
         local cv = api:Canvas()
@@ -153,31 +234,26 @@ return {
             end
         )
 
-        local MOVE_SPD = 300
-        local SCROLL   = 55        -- 平台上滚速度（也是骑乘上移速度）：决定「不动多久被顶死」
-        local GRAVITY  = 900
-        local MAX_VY   = 560
+        local MOVE_SPD = 420
+        -- 慢启动→渐快（像断网恐龙）：开局慢给反应，RAMP 秒升满；越往后越易死 → 分数拉开避免平局。
+        local SCROLL_MIN, SCROLL_MAX, RAMP = 90, 340, 20
+        local GRAVITY  = 1100
+        local MAX_VY   = 760
         local W, H     = G.W, G.H
         local CHAR_SZ  = G.CHAR_SZ
         local PLAT_H   = G.PLAT_H
-        local GAP_W    = G.GAP_W
         local ROW_GAP  = G.ROW_GAP
 
-        -- 角色水平区间是否完全落在某行缺口内（在缺口内=可穿过，否则=踩在实心上）。
-        local function inGap(p)
-            return (G.heroX >= p.gapX) and (G.heroX + CHAR_SZ <= p.gapX + GAP_W)
+        local function over(x, w)
+            return (w and w > 0) and (G.heroX < x + w) and (G.heroX + CHAR_SZ > x)
         end
 
-        local function die(reason)
+        local function die(msg)
             if G.dead then return end
-            G.dead = true
-            G.running = false
+            G.dead = true; G.running = false
             if cv.SetScript then cv:SetScript("OnUpdate", nil) end
-            if G.deathText then
-                G.deathText:SetText("摔 死 了 · " .. reason)
-                G.deathText:Show()
-            end
-            api:Finish(G.depth)    -- elimination：本端出局 → 框架结算（单人立即出结果）
+            if G.deathText then G.deathText:SetText(msg); G.deathText:Show() end
+            api:Finish(G.depth)
         end
         G._die = die
 
@@ -188,31 +264,31 @@ return {
             if dt <= 0 then return end
             if dt > 0.1 then dt = 0.1 end
 
-            -- 1) 水平移动。
+            local scroll = SCROLL_MIN + (SCROLL_MAX - SCROLL_MIN) * math.min(1, G.elapsed / RAMP)
+            G.elapsed = G.elapsed + dt
+
             if G.held.left  then G.heroX = G.heroX - MOVE_SPD * dt end
             if G.held.right then G.heroX = G.heroX + MOVE_SPD * dt end
             if G.heroX < 0 then G.heroX = 0 end
             if G.heroX > W - CHAR_SZ then G.heroX = W - CHAR_SZ end
 
-            -- 2) 平台上滚 + 回收（滚出顶 → 回收到底部成新一层，重掷缺口/刺）。
+            -- 上滚 + 回收。
             for i = 1, #G.plats do
                 local p = G.plats[i]
-                p.y = p.y - SCROLL * dt
+                p.y = p.y - scroll * dt
                 if p.y + PLAT_H < 0 then
                     local maxY = -1e9
                     for j = 1, #G.plats do if G.plats[j].y > maxY then maxY = G.plats[j].y end end
                     p.y = maxY + ROW_GAP
-                    p.gapX = G.nextGapX()
-                    p.spiked = G.nextSpike()
-                    p._passed = false
+                    G.genRow(p)
+                    p._landed = false
                     if G.rest == p then G.rest = nil end
                 end
                 G.placeRow(p)
             end
 
-            -- 3) 竖直：骑乘所踩平台一起上移；否则自由下落 + 落点/穿越检测。
-            if G.rest and not inGap(G.rest) then
-                -- 仍踩在实心上 → 跟随平台上移（被往顶部托）。
+            -- 竖直：骑乘安全平台 / 自由下落 + 落点。
+            if G.rest and over(G.rest.safeX, G.rest.safeW) then
                 G.heroY = G.rest.y - CHAR_SZ
                 G.vy = 0
             else
@@ -226,34 +302,27 @@ return {
                     for i = 1, #G.plats do
                         local p = G.plats[i]
                         if prevBottom <= p.y + 2 and newBottom >= p.y then
-                            if inGap(p) then
-                                if not p._passed then
-                                    p._passed = true
-                                    G.depth = G.depth + 1
-                                    api:SetScore(G.depth)
+                            if over(p.safeX, p.safeW) then
+                                G.heroY = p.y - CHAR_SZ; G.vy = 0; G.rest = p
+                                if not p._landed then
+                                    p._landed = true; G.depth = G.depth + 1; api:SetScore(G.depth)
                                 end
-                            else
-                                -- 落到实心：带刺即死，否则站稳。
-                                if p.spiked then die("撞 到 刺"); return end
-                                G.heroY = p.y - CHAR_SZ
-                                G.vy = 0
-                                G.rest = p
                                 break
+                            elseif p.hasSpike and over(p.spikeX, p.spikeW) then
+                                die("扎 死 在 刺 上！"); return
                             end
+                            -- 否则空隙：穿过去
                         end
                     end
                 end
             end
 
-            -- 4) 死亡判定（无 clamp）：被顶出顶部 / 坠出底部。
-            if G.heroY <= 0 then die("被 顶 出 顶 部"); return end
-            if G.heroY > H then die("坠 落 出 局"); return end
-
+            if G.heroY <= 0 then die("被 夹 死 在 顶 部！"); return end
+            if G.heroY > H then die("坠 落 摔 死 了！"); return end
             G.placeHero()
         end)
     end,
 
-    -- stop：时间到（maxDuration）/ 框架收尾 → 停循环、冻结（键盘框架自动归还）。
     stop = function(ctx, api)
         local G = ctx._d100
         if G then G.running = false end
@@ -261,7 +330,6 @@ return {
         if cv then cv:SetScript("OnUpdate", nil) end
     end,
 
-    -- teardown：关闭/热升级 → 清理一切（停循环、隐藏所有元素）。幂等。
     teardown = function(ctx, api)
         local cv = api:Canvas()
         local G = ctx._d100
@@ -271,8 +339,11 @@ return {
             if G.plats then
                 for i = 1, #G.plats do
                     local p = G.plats[i]
-                    if p.left  then p.left:Hide() end
-                    if p.right then p.right:Hide() end
+                    if p.safeTex  then p.safeTex:Hide() end
+                    if p.spikeTex then p.spikeTex:Hide() end
+                    if p.spikes then
+                        for s = 1, #p.spikes do for k = 1, #p.spikes[s] do p.spikes[s][k]:Hide() end end
+                    end
                 end
             end
             if G.hero then G.hero:Hide() end
@@ -281,23 +352,15 @@ return {
         ctx._d100 = nil
     end,
 
-    -- onTie：被选中加赛 → 复用 setup+start（框架换 round → 关卡变）。留空即可。
     onTie = function(ctx, api) end,
     onResult = function(ctx) end,
 }
 ]]
 
-------------------------------------------------------------
--- 从 SOURCE 跑出 def，并把源码挂回 def.code（供 ExportGame 打包，§6）
-------------------------------------------------------------
 local def = assert(loadstring(SOURCE))()
 def.code = SOURCE
-
 local GAME_VERSION = def.version
 
-------------------------------------------------------------
--- 注册（核心未就绪则压 pending 队列）—— 照 SpeedClick 外层引导
-------------------------------------------------------------
 local GL = _G.GameLobby
 if GL and GL.RegisterGame then
     GL:RegisterGame(def)

@@ -162,6 +162,13 @@ function Comm:PackPrize(prizeTbl)
     -- 拷一份并对自由文本字段做长度截断（不改调用方的原表）。
     local p = {}
     for k, v in pairs(prizeTbl) do p[k] = v end
+    -- loot 态只传 itemLink + rarity：itemLink 本身已内含「物品名 + 稀有度颜色」，收端可用它经
+    -- GetItemInfo 现场还原名字/图标/类型/tooltip（见 LootCard.renderLoot）。丢掉 name/icon/type/
+    -- slot/flavor/stat 这些冗余字段后，编码后仅 ~110 字节，**单条消息绰绰有余**（无需分多条/粘包重组），
+    -- 真实战利品才能稳稳地一条广播到全团。WotLK 的 itemLink 长度可控（~55-70B），不会超界。
+    if p.mode == "loot" then
+        p = { mode = "loot", itemLink = p.itemLink, rarity = p.rarity }
+    end
     if type(p.name) == "string" then p.name = SafeTruncate(p.name, PRIZE_TEXT_MAX_BYTES) end
     if type(p.text) == "string" then p.text = SafeTruncate(p.text, PRIZE_TEXT_MAX_BYTES) end
 
@@ -172,12 +179,11 @@ function Comm:PackPrize(prizeTbl)
     local okB, encoded = pcall(b64.Encode, bytes)
     if not okB or type(encoded) ~= "string" then return "" end
 
-    -- 末位字段长度兜底：若编码后过长（极端的超长 itemLink + name + glyph 叠加），
-    -- 给 Match 一个可见告警，但**不在此截断**——截断 base64 会让 UnpackPrize 整串解析失败、
-    -- 反而丢掉 prize；过长的根因应由 Match 在构造 prize 时收敛（如只传 itemLink 不再附 name）。
-    -- 这里取一个保守的「单字段安全预算」：255 - Start 前导约 80 - 余量 ≈ 150。
-    if #encoded > 150 and GL.Emit then
-        GL:Emit("LOG", "warn", "prize 编码后过长（" .. #encoded .. " 字节），可能撑爆消息，请精简奖品")
+    -- 末位字段长度兜底：loot 已精简到 ~110B、custom 文本已截断，正常都远低于上限。
+    -- 仅当编码后逼近「单条消息可用预算」（255 - Start 前导约 75 ≈ 180）才告警，避免误报。
+    -- 不在此截断（截断 base64 会让 UnpackPrize 整串失败、反而丢掉 prize）。
+    if #encoded > 180 and GL.Emit then
+        GL:Emit("LOG", "warn", "prize 编码后过长（" .. #encoded .. " 字节），请精简奖品文字")
     end
     return encoded
 end

@@ -95,9 +95,9 @@ step("advance 过倒计时 → PLAYING + setup/start 被调", function()
     assert(G and G.hero, "setup 未建角色")
     assert(G.plats and #G.plats > 0, "平台池未建")
     assert(G.running == true, "start 未挂 OnUpdate")
-    -- 带刺标记字段存在（具体某局初始 8 块是否含刺取决于种子，刺主要在平台回收时出现；
-    -- 不在此做种子敏感断言，带刺秒杀逻辑由「落刺即死」场景 + 真机验证）。
-    assert(type(G.plats[1].spiked) == "boolean", "平台应有 spiked 标记字段")
+    -- 每行必有安全块（可解性保证），刺为可选；不做种子敏感断言（带刺秒杀由专门场景 + 真机验证）。
+    assert(type(G.plats[1].safeX) == "number" and G.plats[1].safeW > 0, "每行应有安全块")
+    assert(type(G.plats[1].hasSpike) == "boolean", "平台应有 hasSpike 标记字段")
     assert(type(G.nextSpike) == "function", "应有 nextSpike 生成器")
 end)
 
@@ -111,20 +111,21 @@ step("按键 → 角色左右移动", function()
     assert(G.heroX > x0, "按右键角色应右移")
 end)
 
-step("对齐缺口下落 → depth+1（确定性计分）", function()
+step("落到新平台 → depth+1（确定性计分）", function()
     local cv = GL.Match._api:Canvas()
     local G = ctxRef._d100
     G.dead = false; G.rest = nil
     G.heroY = G.H * 0.5                       -- 安全高度（远离上下死亡边界）
     local before = G.depth
     local p = G.plats[1]
-    p._passed = false
-    p.gapX = 100
-    p.y = G.heroY + G.CHAR_SZ + 6             -- 平台顶在脚下一点
-    G.heroX = p.gapX + (G.GAP_W - G.CHAR_SZ) / 2   -- 对齐缺口正中
-    G.vy = 160
+    p._landed = false
+    p.hasSpike = false
+    p.safeX = 0; p.safeW = G.W                -- 整宽安全平台，必落上
+    p.y = G.heroY + G.CHAR_SZ + 15            -- 平台顶在脚下一点（留够余量，抵消本帧平台上滚）
+    G.heroX = 50
+    G.vy = 300
     env.fireScript(cv, "OnUpdate", 0.05)
-    assert(G.depth == before + 1, "对齐缺口应 depth+1，before=" .. before .. " after=" .. G.depth)
+    assert(G.depth == before + 1, "落到新平台应 depth+1，before=" .. before .. " after=" .. G.depth)
     assert(GL.Match._api:GetScore() == G.depth, "SetScore 未推到 ctx.scores")
 end)
 
@@ -152,13 +153,13 @@ step("被顶到画布顶部 → 死亡", function()
     local G = ctx._d100
     local cv = GL.Match._api:Canvas()
     G.dead = false
-    -- 模拟骑乘平台被托到顶：rest 平台 y≈0、角色不在其缺口内 → 骑乘分支把 heroY 设为负 → 出顶死。
+    -- 模拟骑乘平台被托到顶：rest 安全块 y≈0、角色与其水平重叠 → 骑乘分支把 heroY 设为负 → 夹顶死。
     local p = G.plats[1]
-    p.y = 0; p.gapX = 9999       -- 缺口移出画布 → inGap=false → 角色踩实心、随平台上移
+    p.y = 0; p.safeX = 0; p.safeW = G.W   -- 整宽安全块 → over=true → 角色随平台上移被托到顶
     G.rest = p
     G.heroX = 10
     env.fireScript(cv, "OnUpdate", 0.05)
-    assert(G.dead == true, "出顶应触发死亡")
+    assert(G.dead == true, "夹顶应触发死亡")
     env.advance(2)
     GL.Match:Close()
 end)
@@ -172,9 +173,10 @@ step("落到带刺平台 → 死亡（带刺秒杀逻辑）", function()
     G.dead = false; G.rest = nil
     G.heroY = G.H * 0.4
     local p = G.plats[1]
-    p.spiked = true; p.gapX = 9999          -- 缺口移出 → 角色必落在实心（带刺）上
-    p.y = G.heroY + G.CHAR_SZ + 4
-    G.heroX = 50; G.vy = 120
+    -- 安全块缩到 0 宽（角色落不上），刺块整宽 → 角色必落到刺上 → 扎死
+    p.hasSpike = true; p.safeX = 0; p.safeW = 0; p.spikeX = 0; p.spikeW = G.W
+    p.y = G.heroY + G.CHAR_SZ + 15           -- 留够余量，抵消本帧平台上滚
+    G.heroX = 50; G.vy = 300
     env.fireScript(cv, "OnUpdate", 0.05)
     assert(G.dead == true, "落到带刺平台应死亡")
     env.advance(2); GL.Match:Close()

@@ -45,6 +45,20 @@ function W.LogStrip(parent)
         btn:SetScript("OnClick", function(s) if s._onClick then s._onClick() end end)
         btn:SetScript("OnEnter", function(s) if s._onClick then s._hl:SetAlpha(0.14) end end)
         btn:SetScript("OnLeave", function(s) s._hl:SetAlpha(0) end)
+
+        -- 行内物品链接（|Hitem:..|h）支持：悬停看 tooltip、Shift+点击进聊天框（等同背包点物品）。
+        -- 只对含链接的行有意义；普通行不会触发这些回调。
+        if btn.SetHyperlinksEnabled then btn:SetHyperlinksEnabled(true) end
+        btn:SetScript("OnHyperlinkClick", function(_, link, text, button)
+            if _G.SetItemRef then SetItemRef(link, text, button) end
+        end)
+        btn:SetScript("OnHyperlinkEnter", function(s, link)
+            if not _G.GameTooltip then return end
+            GameTooltip:SetOwner(s, "ANCHOR_TOPLEFT")
+            GameTooltip:SetHyperlink(link)
+            GameTooltip:Show()
+        end)
+        btn:SetScript("OnHyperlinkLeave", function() if _G.GameTooltip then GameTooltip:Hide() end end)
         return btn
     end
     for i = 1, f._max do f._lines[i] = makeLine(i) end

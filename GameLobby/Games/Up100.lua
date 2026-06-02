@@ -1,137 +1,197 @@
--- Games/Up100.lua —— 是男人就上 100 层（自绘档 canvas 游戏，契约 game-dev-spec §1/§2/§5.3）
+-- Games/Up100.lua —— 是男人就上 100 层（自绘档 canvas 游戏，Doodle Jump 式弹跳）
 -- owner: wow-addon-engineer
 --
--- 玩法：30 秒内尽量往上爬。一个小角色靠自动弹跳（Doodle Jump 式）持续上升，
---   一排排平台向下滚动（等效角色在向上攀爬）。玩家按 方向键 / AD 左右移动，
---   对准上方平台落脚；每登上更高一层 = 层数 +1。层数多者胜。
---   无死亡机制：踩空掉到底部会被 clamp 并重新弹起，不惩罚（用户要求「能移动就行」）。
+-- 玩法：小角色自动弹跳往上爬，按 方向键/AD 左右移动对准上方平台落脚；每登上更高一层 = 层数 +1。
+--   ★ 带刺平台「只要碰到就死」（不是落上才死）—— 任何方向的接触都判死（touch-death）。
+--   ★ 屏幕底部有一条不断上涨且越来越快的「地板/深渊」追着你 —— 爬慢了会被追上吞掉。层数高者胜。
 --
--- 与「是男人就下 100 层」(down100) 对称：同样的「平台滚动 + 左右移动对准 + 每层+1」结构，
---   只是滚动方向 / 冲力方向相反（up100 向上爬，down100 向下落）。命名/骨架尽量一致便于统一维护。
+-- 层的结构（每层都可落脚 + 可选一块带刺平台）：
+--   · 每层都有一块「安全平台」（土黄）→ 永远能继续往上跳（可解性）。
+--   · 部分层额外有一块「带刺平台」（红+三角刺），放在远离安全链落脚走廊的一侧 → 沿安全链跳不会碰到。
 --
--- 不变量 #1（同体）：首行 aura_env；本游戏独立版本门控（version="1.0.0"，自动替换 GameRegistry 占位）。
--- 不变量 #2（解耦）：只走 api（SetScore/Canvas/CaptureKeyboard/GetSeed/IsSpectator），绝不自己发通讯。
--- 自包含（§6）：SOURCE 内只用 ctx/api 形参与全局（math/GetTime/_G.GameLobby），无任何外部 upvalue。
+-- 可解性保证（两趟生成 + 走廊外放刺，已 sim 验证）：先生成安全链（相邻层水平偏移 ≤ reachX），
+--   再把刺放到「角色沿安全链可达包络」之外 → 难但永远过得去。
+--
+-- 不变量 #2（解耦）：只走 api。公平（§4）：api:Random 按种子两趟生成，各端一致。自包含（§6）：def 在 SOURCE。
 
 local self = aura_env or {}
 
-------------------------------------------------------------
--- 游戏 def 的自包含源码（SOURCE）—— loadstring 后 return 一张 def 表
-------------------------------------------------------------
 local SOURCE = [[
 return {
     --==== 身份 ====--
     id        = "up100",
     name      = "是男人就上 100 层",
-    version   = "1.1.0",                                   -- 改版本同时改这里（热升级门控）
+    version   = "1.3.0",
     glyph     = "Interface\\Icons\\Ability_Hunter_Pathfinding",
-    descLines = { "踩平台往上，越高越强", "撞刺/坠落即死" },
+    descLines = { "弹跳往上，地板在追", "碰刺即死，越高越强" },
 
-    --==== 元数据（框架据此通用排名/校验/展示）====--
-    tier        = "canvas",          -- 自绘档
-    endMode     = "elimination",     -- 玩到死：撞刺/坠出画布底 → 立即出局，分定格在已爬层数
-    scoreOrder  = "desc",            -- 层数高者胜
+    --==== 元数据 ====--
+    tier        = "canvas",
+    endMode     = "elimination",
+    scoreOrder  = "desc",
     scoreUnit   = "层",
-    duration    = 60,                -- maxDuration 兜底
-    needsKeyboard = true,            -- 方向键控角色
-    seeded      = true,              -- 各端关卡一致
-    scoreCap    = function() return 999 end,   -- 仅防离谱上报
-
+    duration    = 30,
+    needsKeyboard = true,
+    seeded      = true,
+    scoreCap    = function() return 999 end,
     locked      = false,
 
     --==== 生命周期 ====--
 
-    -- setup：建画布元素（角色 + 平台对象池）、用统一种子一次性生成关卡布局，但别动（别开循环、别收输入）。
     setup = function(ctx, api)
         local cv = api:Canvas()
-        if not cv then return end   -- PlayingScreen 未就绪（纯逻辑单测早期）：静默返回
-
-        -- 画布尺寸（运行期读真实值，无头/未布局时给兜底）。
+        if not cv then return end
         local W = cv:GetWidth();  if not W or W <= 0 then W = 760 end
         local H = cv:GetHeight(); if not H or H <= 0 then H = 460 end
 
-        -- 本局状态全挂在一张表上（self 局部表，自包含；teardown 清理用）。
         local G = {}
         G.cv = cv
         G.W, G.H = W, H
 
-        --==== 调参（与 down100 对称，方向相反）====--
-        G.charSize   = 18           -- 角色方块边长
-        G.pltW       = 78           -- 平台宽（缺口靠平台只占一段宽度实现）
-        G.pltH       = 10           -- 平台高
-        G.gapY       = 70           -- 相邻平台层垂直间距
-        G.gravity    = 560          -- 重力加速度（像素/秒^2，向下为负 vy）
-        G.jumpVel    = 430          -- 落到平台时的向上弹跳初速度
-        G.moveSpeed  = 300          -- 左右移动速度（像素/秒）
-        G.scrollY    = H * 0.55     -- 角色超过此高度则世界向下滚（等效相机上移、角色保持视野内）
+        --==== 调参 ====--
+        G.charSize = 18
+        G.pltW     = 78
+        G.pltH     = 10
+        G.gapY     = 64
+        G.scrollY  = H * 0.46
+        local SBW, SBH, LAYERS = 14, 12, 5
+        G.SBW, G.SBH, G.LAYERS = SBW, SBH, LAYERS
+        G.SPIKE_HIT = SBH                        -- 刺的判定额外向上加 SBH（覆盖三角刺，碰到即死）
 
-        --==== 用统一种子一次性生成平台序列（各端一致，§4）====--
-        -- worldY：以「世界坐标」记平台高度（越大越高）；平台沿世界系固定，靠 G.camY 投影到画布。
-        -- 每层平台的水平位置 px 随机（留出左右边距），相当于「缺口/落脚点」位置变化。
-        -- 约束：相邻两层 px 偏移 ≤ reachX，保证一次弹跳的滞空时间内左右移动够得着下一层（关卡总是可通）。
-        -- ⚠️ WoW 沙箱无 math.randomseed；用框架确定性随机 api:Random（各端 matchId+round 一致）。
-        G.platforms = {}            -- { worldY=, px=, tier=, tex= }
-        local layers = 200          -- 预生成足量层（30s 一般爬不满）
+        --==== 两趟生成关卡（各端一致）====--
+        local layers = 220
+        local reachX = 60                        -- 安全链相邻层水平偏移（小→走廊窄→好放刺）
+        local CHAR = G.charSize
+        local SPIKE_PCT = 48
+        local MARGIN = 8
         local minPx, maxPx = 8, W - G.pltW - 8
         if maxPx < minPx then maxPx = minPx end
-        local reachX = 130          -- 相邻层水平最大偏移（滞空时间 × moveSpeed 内可达）
-        local SPIKE_PCT = 26        -- 带刺平台占比（%）：落上即死
-        local prevPx = math.floor((minPx + maxPx) / 2)   -- 第一层居中（角色开局站这）
+        G.layers = {}
+        -- 趟 1：安全链。
+        local lastSafe = math.floor((minPx + maxPx) / 2)
         for i = 1, layers do
-            local lo = math.max(minPx, prevPx - reachX)
-            local hi = math.min(maxPx, prevPx + reachX)
-            local px = (i == 1) and prevPx or api:Random(math.floor(lo), math.floor(hi))
-            -- 首层与第 2 层不带刺（给安全起步）；其余按比例带刺。
-            local spiked = (i > 2) and (api:Random(1, 100) <= SPIKE_PCT) or false
-            G.platforms[i] = { worldY = i * G.gapY, px = px, tier = i, spiked = spiked }
-            prevPx = px
+            local lo = math.max(minPx, lastSafe - reachX)
+            local hi = math.min(maxPx, lastSafe + reachX)
+            if hi < lo then hi = lo end
+            local sx = (i == 1) and lastSafe or api:Random(math.floor(lo), math.floor(hi))
+            G.layers[i] = { worldY = i * G.gapY, safeX = sx, tier = i, hasSpike = false, spikeX = 0 }
+            lastSafe = sx
+        end
+        -- 趟 2：在「角色沿安全链可达包络」之外放刺（前 2 层不放，给安全起步）。
+        for i = 3, layers do
+            if api:Random(1, 100) <= SPIKE_PCT then
+                local lo, hi = 1e9, -1e9
+                for j = math.max(1, i - 1), math.min(layers, i + 1) do
+                    local c1 = G.layers[j].safeX - reachX - CHAR
+                    local c2 = G.layers[j].safeX + G.pltW + reachX + CHAR
+                    if c1 < lo then lo = c1 end
+                    if c2 > hi then hi = c2 end
+                end
+                local rightLo = math.ceil(hi) + MARGIN
+                local rightHi = W - G.pltW
+                local leftHi  = math.floor(lo) - MARGIN - G.pltW
+                local canR = rightLo <= rightHi
+                local canL = leftHi >= 0
+                if canR and canL then
+                    if (rightHi - rightLo) >= leftHi then G.layers[i].spikeX = api:Random(rightLo, rightHi)
+                    else G.layers[i].spikeX = api:Random(0, leftHi) end
+                    G.layers[i].hasSpike = true
+                elseif canR then G.layers[i].spikeX = api:Random(rightLo, rightHi); G.layers[i].hasSpike = true
+                elseif canL then G.layers[i].spikeX = api:Random(0, leftHi); G.layers[i].hasSpike = true end
+            end
         end
 
-        --==== 角色（纯色方块）====--
+        --==== 角色 ====--
         local ch = cv:CreateTexture(nil, "OVERLAY")
-        ch:SetColorTexture(0.30, 0.85, 1.0, 1.0)   -- 青蓝方块
+        ch:SetColorTexture(0.30, 0.85, 1.0, 1.0)
         ch:SetSize(G.charSize, G.charSize)
         G.charTex = ch
 
-        --==== 平台纹理对象池（复用，OnUpdate 只改位置/显隐，§8）====--
-        -- 画布一屏最多显示 ceil(H/gapY)+2 层，池子开够即可。
-        G.pool = {}
+        --==== 对象池：每槽 = 安全平台 + 刺平台 + 一排三角刺 ====--
         local poolN = math.ceil(H / G.gapY) + 3
+        local maxSpikes = math.ceil(G.pltW / SBW)
+        G.pool = {}
         for i = 1, poolN do
-            local t = cv:CreateTexture(nil, "ARTWORK")
-            t:SetColorTexture(0.55, 0.45, 0.30, 1.0)   -- 土黄平台
-            t:SetSize(G.pltW, G.pltH)
-            t:Hide()
-            G.pool[i] = t
+            local safeTex = cv:CreateTexture(nil, "ARTWORK")
+            safeTex:SetColorTexture(0.55, 0.45, 0.30, 1.0)
+            safeTex:SetSize(G.pltW, G.pltH); safeTex:Hide()
+            local spikeTex = cv:CreateTexture(nil, "ARTWORK")
+            spikeTex:SetColorTexture(0.45, 0.13, 0.11, 1.0)
+            spikeTex:SetSize(G.pltW, G.pltH); spikeTex:Hide()
+            local spikes = {}
+            for s = 1, maxSpikes do
+                local lyr = {}
+                for k = 1, LAYERS do
+                    local t = cv:CreateTexture(nil, "OVERLAY")
+                    t:SetColorTexture(0.93, 0.93, 0.97, 1); t:Hide()
+                    lyr[k] = t
+                end
+                spikes[s] = lyr
+            end
+            G.pool[i] = { safeTex = safeTex, spikeTex = spikeTex, spikes = spikes }
         end
 
-        --==== 初始姿态：角色站在第一层平台上，相机从底部起 ====--
-        G.camY = 0                                  -- 世界系相机偏移（越大代表爬越高）
-        local p1 = G.platforms[1]
-        G.charX = p1.px + (G.pltW - G.charSize) / 2  -- 画布系 x（左下原点）
-        G.charWorldY = p1.worldY + G.pltH            -- 角色脚底所在世界高度
+        -- 把第 slot 个池槽画成 layer L（y = 平台底距画布底，向上为正）。
+        G.drawSlot = function(slot, L, y)
+            local s = slot.safeTex
+            s:ClearAllPoints(); s:SetPoint("BOTTOMLEFT", cv, "BOTTOMLEFT", L.safeX, y); s:Show()
+            if L.hasSpike then
+                local r = slot.spikeTex
+                r:ClearAllPoints(); r:SetPoint("BOTTOMLEFT", cv, "BOTTOMLEFT", L.spikeX, y); r:Show()
+                local nSp = math.floor(G.pltW / SBW); if nSp < 1 then nSp = 1 end
+                local layerH = SBH / LAYERS
+                local base = y + G.pltH
+                for si = 1, #slot.spikes do
+                    local spk = slot.spikes[si]
+                    if si <= nSp then
+                        local cx = L.spikeX + (si - 0.5) * SBW
+                        for k = 0, LAYERS - 1 do
+                            local lw = SBW * (LAYERS - k) / LAYERS
+                            if lw < 1 then lw = 1 end
+                            local t = spk[k + 1]
+                            t:ClearAllPoints(); t:SetSize(lw, layerH + 0.6)
+                            t:SetPoint("BOTTOMLEFT", cv, "BOTTOMLEFT", cx - lw * 0.5, base + k * layerH)
+                            t:Show()
+                        end
+                    else
+                        for k = 1, LAYERS do spk[k]:Hide() end
+                    end
+                end
+            else
+                slot.spikeTex:Hide()
+                for si = 1, #slot.spikes do for k = 1, #slot.spikes[si] do slot.spikes[si][k]:Hide() end end
+            end
+        end
+        G.hideSlot = function(slot)
+            slot.safeTex:Hide(); slot.spikeTex:Hide()
+            for si = 1, #slot.spikes do for k = 1, #slot.spikes[si] do slot.spikes[si][k]:Hide() end end
+        end
+
+        --==== 初始姿态：角色站在第一层，地板从底部起 ====--
+        G.camY = 0
+        local p1 = G.layers[1]
+        G.charX = p1.safeX + (G.pltW - G.charSize) / 2
+        G.charWorldY = p1.worldY + G.pltH
         G.vy = 0
-        G.maxTier = 1                                -- 已登上的最高层（计分依据）
+        G.maxTier = 1
+        G.elapsed = 0
         G.held = { left = false, right = false }
         G.dead = false
 
-        -- 死亡提示文字（居中，初始隐藏）。
         local dtext = cv:CreateFontString(nil, "OVERLAY", "GameFontNormalHuge")
         dtext:SetPoint("CENTER", cv, "CENTER", 0, 0)
         dtext:SetTextColor(1.0, 0.35, 0.25)
         dtext:Hide()
         G.deathText = dtext
 
-        api.G = G   -- 挂到 api 供 start/stop/teardown 共享（仅本局，框架每局重建 api）
+        api.G = G
     end,
 
-    -- start："GO!"：申请键盘 + 开 OnUpdate 循环（dt 驱动，不依赖帧率）。围观者不绑输入不跑逻辑。
     start = function(ctx, api)
-        if api:IsSpectator() then return end   -- 围观者只看（框架渲染别人的实况分），不收输入不计分
+        if api:IsSpectator() then return end
         local G = api.G
         if not G or not G.cv then return end
 
-        -- 键盘：框架托管 propagate/ESC/归还，只给回调记 held。LEFT/A 左、RIGHT/D 右。
         api:CaptureKeyboard(
             function(key)
                 if key == "LEFT" or key == "A" then G.held.left = true
@@ -143,147 +203,137 @@ return {
             end
         )
 
-        -- 投影：世界高度 worldY → 画布系 y（左下为原点，向上为正）。
+        local W, H = G.W, G.H
+        local cs, pltW, pltH, gapY = G.charSize, G.pltW, G.pltH, G.gapY
+        local SPIKE_HIT = G.SPIKE_HIT
+        local MOVE = 340
+        local GRAVITY = 1500
+        local JUMP = 520               -- 弹跳 ~1.4 层：稳稳够到上一层、几乎不过冲（便于刺的走廊保证）
+        -- 地板上涨「慢→快」：越往后追得越凶 → 爬慢者被吞，分数拉开避免平局。
+        local AS_MIN, AS_MAX, RAMP = 60, 240, 24
+
         local function projY(worldY) return worldY - G.camY end
 
-        -- 死亡：停循环、显示提示、上报最终层数（elimination：单人立即结算）。
-        local function die(reason)
+        local function die(msg)
             if G.dead then return end
             G.dead = true
             if G.cv then G.cv:SetScript("OnUpdate", nil) end
-            if G.deathText then
-                G.deathText:SetText("摔 死 了 · " .. reason)
-                G.deathText:Show()
-            end
+            if G.deathText then G.deathText:SetText(msg); G.deathText:Show() end
             api:Finish(G.maxTier - 1)
         end
         G._die = die
 
-        -- 主循环（dt 驱动）：移动 → 重力/弹跳 → 相机跟随 → 计分 → 重绘。
+        G.vy = JUMP                    -- 开局第一跳
+
         G.cv:SetScript("OnUpdate", function(_, dt)
             if G.dead then return end
-            dt = dt or 0
+            dt = tonumber(dt) or 0
             if dt <= 0 then return end
-            if dt > 0.1 then dt = 0.1 end   -- 卡顿封顶，防穿模
+            if dt > 0.05 then dt = 0.05 end
 
-            local W, H = G.W, G.H
-            local cs = G.charSize
+            local autoScroll = AS_MIN + (AS_MAX - AS_MIN) * math.min(1, G.elapsed / RAMP)
+            G.elapsed = G.elapsed + dt
 
-            -- 1) 左右移动（held + dt，不依赖帧率），clamp 到画布内。
+            -- 左右移动。
             local dx = 0
-            if G.held.left then dx = dx - G.moveSpeed * dt end
-            if G.held.right then dx = dx + G.moveSpeed * dt end
+            if G.held.left then dx = dx - MOVE * dt end
+            if G.held.right then dx = dx + MOVE * dt end
             G.charX = G.charX + dx
             if G.charX < 0 then G.charX = 0 end
             if G.charX > W - cs then G.charX = W - cs end
 
-            -- 2) 竖直：重力下拉，记录上一帧脚底世界高度（用于「自上而下穿过平台才算落脚」判定）。
+            -- 竖直：重力 + 弹跳。
             local prevWorldY = G.charWorldY
-            G.vy = G.vy - G.gravity * dt
+            G.vy = G.vy - GRAVITY * dt
             G.charWorldY = G.charWorldY + G.vy * dt
 
-            -- 3) 落脚判定：仅当下落中（vy<=0）、且本帧脚底从平台上方穿到下方、x 在平台范围内 → 弹跳。
-            if G.vy <= 0 then
-                for i = 1, #G.platforms do
-                    local p = G.platforms[i]
-                    local top = p.worldY + G.pltH           -- 平台上表面世界高度
-                    -- 只看可能相交的层（早退优化）：平台太高就跳过后续（platforms 按 worldY 升序）。
-                    if top > prevWorldY + 1 then break end
-                    if prevWorldY >= top - 1 and G.charWorldY <= top then
-                        -- x 重叠判定（角色与平台水平有交集）
-                        if G.charX + cs > p.px and G.charX < p.px + G.pltW then
-                            if p.spiked then
-                                G.charWorldY = top       -- 贴到刺面上
-                                die("撞 到 刺"); return
-                            end
-                            G.charWorldY = top
-                            G.vy = G.jumpVel              -- 自动向上弹
-                            if p.tier > G.maxTier then G.maxTier = p.tier end
-                            break
-                        end
+            -- 碰撞/落脚：只查角色附近的层（worldY 窗口）。
+            local baseIdx = math.floor(G.charWorldY / gapY)
+            local n = #G.layers
+            for i = math.max(1, baseIdx - 1), math.min(n, baseIdx + 3) do
+                local L = G.layers[i]
+                -- 带刺平台：任何接触即死（touch-death，含三角刺高度 SPIKE_HIT）。
+                if L.hasSpike then
+                    if (G.charX < L.spikeX + pltW) and (G.charX + cs > L.spikeX)
+                       and (G.charWorldY < L.worldY + pltH + SPIKE_HIT) and (G.charWorldY + cs > L.worldY) then
+                        die("扎 死 在 刺 上！"); return
+                    end
+                end
+                -- 安全平台：仅下落中、本帧脚底自上而下穿过平台顶、x 重叠 → 弹起。
+                if G.vy <= 0 then
+                    local top = L.worldY + pltH
+                    if prevWorldY >= top - 1 and G.charWorldY <= top
+                       and (G.charX + cs > L.safeX) and (G.charX < L.safeX + pltW) then
+                        G.charWorldY = top
+                        G.vy = JUMP
+                        if L.tier > G.maxTier then G.maxTier = L.tier end
                     end
                 end
             end
 
-            -- 4) 坠落死：角色脚底投影到画布底部以下（摔出视野）→ 立即出局（elimination）。
+            -- 地板上涨（加速）+ 相机跟随（角色太高则相机追上，别冲出顶）。
+            G.camY = G.camY + autoScroll * dt
+            local follow = G.charWorldY - G.scrollY
+            if follow > G.camY then G.camY = follow end
+
+            -- 被地板吞 / 坠出视野下方 → 死。
             local chCanvasY = G.charWorldY - G.camY
-            if chCanvasY <= 0 then
-                die("坠 落 出 局"); return
-            end
+            if chCanvasY <= 0 then die("被 深 渊 吞 没！"); return end
 
-            -- 5) 相机跟随：角色在画布内高度超过 scrollY 阈值则世界下滚（camY 增大），角色保持视野内。
-            if chCanvasY > G.scrollY then
-                G.camY = G.charWorldY - G.scrollY
-            end
-
-            -- 6) 计分：当前最高层 - 1（站第一层算 0 层，往上每登一层 +1），上报。
             api:SetScore(G.maxTier - 1)
 
-            -- 7) 重绘：角色 + 可见平台（对象池只显示画布范围内的层）。
+            -- 重绘。
             local ch = G.charTex
             ch:ClearAllPoints()
             ch:SetPoint("BOTTOMLEFT", G.cv, "BOTTOMLEFT", G.charX, projY(G.charWorldY))
             ch:Show()
-
-            -- 找出当前可见的平台层区间，复用池子绘制。
-            local poolIdx = 1
-            for i = 1, #G.platforms do
-                local p = G.platforms[i]
-                local y = projY(p.worldY)
-                if y > -G.pltH and y < H + G.pltH then
-                    local t = G.pool[poolIdx]
-                    if not t then break end             -- 池子用尽（理论不会，可见层 ≤ poolN）
-                    -- 带刺平台染红（落上即死），普通土黄。池子复用，故每帧按当前层重设色。
-                    if p.spiked then t:SetColorTexture(0.90, 0.22, 0.16, 1.0)
-                    else t:SetColorTexture(0.55, 0.45, 0.30, 1.0) end
-                    t:ClearAllPoints()
-                    t:SetPoint("BOTTOMLEFT", G.cv, "BOTTOMLEFT", p.px, y)
-                    t:Show()
-                    poolIdx = poolIdx + 1
-                elseif y >= H + G.pltH then
-                    break                                -- 后续平台更高、全在视野外，早退
+            local slotIdx = 1
+            for i = 1, n do
+                local L = G.layers[i]
+                local y = projY(L.worldY)
+                if y > -gapY and y < H + gapY then
+                    local slot = G.pool[slotIdx]
+                    if not slot then break end
+                    G.drawSlot(slot, L, y)
+                    slotIdx = slotIdx + 1
+                elseif y >= H + gapY then
+                    break
                 end
             end
-            -- 隐藏池中未用到的纹理。
-            for j = poolIdx, #G.pool do G.pool[j]:Hide() end
+            for j = slotIdx, #G.pool do G.hideSlot(G.pool[j]) end
         end)
     end,
 
-    -- stop：时间到 / 主动结束：停循环冻结（分数已在 api 里；键盘框架自动归还）。
     stop = function(ctx, api)
         local G = api.G
         if G and G.cv then G.cv:SetScript("OnUpdate", nil) end
     end,
 
-    -- teardown：关闭 / 热升级：清理一切（停循环、隐藏元素）。幂等。
     teardown = function(ctx, api)
         local G = api.G
         if not G then return end
         if G.cv then G.cv:SetScript("OnUpdate", nil) end
         if G.charTex then G.charTex:Hide() end
-        if G.pool then for _, t in ipairs(G.pool) do t:Hide() end end
+        if G.pool then for _, slot in ipairs(G.pool) do
+            if slot.safeTex then slot.safeTex:Hide() end
+            if slot.spikeTex then slot.spikeTex:Hide() end
+            if slot.spikes then for s = 1, #slot.spikes do for k = 1, #slot.spikes[s] do slot.spikes[s][k]:Hide() end end end
+        end end
         if G.deathText then G.deathText:Hide() end
         api.G = nil
     end,
 
-    -- onTie：被选中加赛——不实现则框架复用 setup+start（GetSeed 因 round 变化自动换关卡），足够。
+    onTie = function(ctx, api) end,
 }
 ]]
 
-------------------------------------------------------------
--- 从 SOURCE 跑出 def，并把源码挂回 def.code（供 ExportGame 打包分享，§6）
-------------------------------------------------------------
 local def = assert(loadstring(SOURCE))()
 def.code = SOURCE
+local GAME_VERSION = def.version
 
-local GAME_VERSION = def.version   -- 外层引导/日志用，与 SOURCE 内一致
-
-------------------------------------------------------------
--- 注册（核心未就绪则压 pending 队列）—— 与 SpeedClick.lua 同骨架
-------------------------------------------------------------
 local GL = _G.GameLobby
 if GL and GL.RegisterGame then
-    GL:RegisterGame(def)                         -- 版本门控自动替换 up100 的 0.0.0 占位
+    GL:RegisterGame(def)
 elseif GL and GL._pendingGames then
     table.insert(GL._pendingGames, def)
 else

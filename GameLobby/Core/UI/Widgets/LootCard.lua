@@ -114,16 +114,23 @@ function W.LootCard(parent, isLeaderEditable)
         input:SetScript("OnEnterPressed",  function(s) s:ClearFocus() end)
         input:SetScript("OnEditFocusGained", function(s) GL.UI._lootInput = s end)
         card._input = input
+        GL.UI._lootInput = input   -- 默认指向（大厅唯一奖品框），不必先点框也能 Shift+贴
 
-        -- Shift+点击背包/拾取物品：把链接塞进当前聚焦的奖品框。WoW 在我们的 EditBox 聚焦时，
-        -- ChatEdit_InsertLink 默认不往非聊天框插入；hooksecurefunc 在原函数之后补一刀。
-        if _G.hooksecurefunc and _G.ChatEdit_InsertLink and not GL.UI._lootLinkHooked then
+        -- Shift+点击背包/拾取物品 → 设为本局战利品。
+        -- 关键：必须钩 HandleModifiedItemClick（每次 Shift+点物品都会触发），而不是 ChatEdit_InsertLink
+        -- ——后者只在「聊天输入框处于激活态」时才会被 WoW 调到；我们的奖品框不是聊天框，永远等不到。
+        -- 我们在奖品框可见时（大厅打开且团长可编辑 → IsVisible=true）抓链接整框设入；
+        -- WoW 默认行为会顺手打开聊天框并塞链接，这里把它清掉避免误发。
+        if _G.hooksecurefunc and _G.HandleModifiedItemClick and not GL.UI._lootLinkHooked then
             GL.UI._lootLinkHooked = true
-            hooksecurefunc("ChatEdit_InsertLink", function(link)
+            hooksecurefunc("HandleModifiedItemClick", function(link)
                 local box = GL.UI._lootInput
-                if box and box.HasFocus and box:HasFocus() and link and link ~= "" then
+                if box and box.IsVisible and box:IsVisible() and link and link ~= "" then
                     box:SetText(link)                            -- 整框设为链接 → OnTextChanged 识别成战利品
                     if box.SetCursorPosition then box:SetCursorPosition(box:GetText():len()) end
+                    -- 收掉默认被打开的聊天输入框（里面也被塞了同一条链接）
+                    local chat = _G.ChatEdit_GetActiveWindow and ChatEdit_GetActiveWindow()
+                    if chat and chat ~= box then chat:SetText(""); chat:Hide() end
                 end
             end)
         end
@@ -131,8 +138,15 @@ function W.LootCard(parent, isLeaderEditable)
 
     -- 内部：三态渲染分发
     local function renderLoot(self_, prize)
-        self_._input:Hide(); if self_._inputMeta then self_._inputMeta:Hide() end
-        self_._name:Show(); self_._meta:Show(); self_._stat:Show()
+        -- 精简传输（只带 itemLink+rarity）时，就地用 itemLink 还原 name/icon/type（GetItemInfo）。
+        if prize.itemLink and (not prize.name or not prize.icon) then
+            local full = parseLoot(prize.itemLink)
+            prize = { mode = "loot", itemLink = prize.itemLink,
+                      name = prize.name or full.name, rarity = prize.rarity or full.rarity,
+                      icon = prize.icon or full.icon, type = prize.type or full.type,
+                      slot = prize.slot or full.slot, _rarityName = full._rarityName,
+                      flavor = prize.flavor, stat = prize.stat, glyph = prize.glyph }
+        end
         local rk = prize.rarity or "epic"
         local rr, rg, rb = theme:Rarity(rk)
         setRingColor(rr, rg, rb)
@@ -141,11 +155,26 @@ function W.LootCard(parent, isLeaderEditable)
         for _, e in pairs(self_._iconBorder3) do e:SetVertexColor(rr, rg, rb, 0.5) end
         local lootIcon = prize.icon or W.GlyphTexture(prize.glyph) or W.ICON_LOOT
         self_._iconTex:SetTexture(lootIcon); self_._iconTex:Show(); self_._glyph:Hide()
-        self_._name:SetText(prize.name or prize.itemLink or "战利品")
-        self_._name:SetTextColor(rr, rg, rb)
-        local metaTxt = table.concat({ prize.type or "", prize.slot or "", prize.flavor or "" }, "  ·  ")
-        self_._meta:SetText((metaTxt:gsub("^%s*·%s*", "")))
-        self_._stat:SetText(prize.stat or "")
+        if self_._editable then
+            -- 可编辑（团长在大厅）：即便已选战利品，也保留输入框 → 可清空(取消)/Shift+点击换物品。
+            -- 修复「赛后回大厅奖品被锁死、换不了」。输入框里放 itemLink（会渲染成彩色物品名）。
+            local link = prize.itemLink or prize.name or ""
+            if self_._input:GetText() ~= link then self_._input:SetText(link) end
+            self_._input:Show(); self_._name:Hide(); self_._meta:Hide(); self_._stat:Hide()
+            if self_._inputMeta then
+                self_._inputMeta:SetText("已选战利品 · Shift+点击换物品 · 清空文本=取消")
+                self_._inputMeta:Show()
+            end
+        else
+            -- 只读（参与端 / 比赛进行中）：展示图标 + 名字 + 类型。
+            self_._input:Hide(); if self_._inputMeta then self_._inputMeta:Hide() end
+            self_._name:Show(); self_._meta:Show(); self_._stat:Show()
+            self_._name:SetText(prize.name or prize.itemLink or "战利品")
+            self_._name:SetTextColor(rr, rg, rb)
+            local metaTxt = table.concat({ prize.type or "", prize.slot or "", prize.flavor or "" }, "  ·  ")
+            self_._meta:SetText((metaTxt:gsub("^%s*·%s*", "")))
+            self_._stat:SetText(prize.stat or "")
+        end
     end
 
     local function renderCustom(self_, prize)
