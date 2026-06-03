@@ -123,26 +123,32 @@ step("OnUpdate 驱动目标移动（位置变化）", function()
     assert(t1.x ~= x0 or t1.y ~= y0, "OnUpdate 后目标位置应变化（dt 驱动）")
 end)
 
-step("点中目标使分数累加（AddScore via OnMouseDown）", function()
+step("点中目标使分数累加（AddScore via OnMouseDown，按尺寸加权）", function()
     local cv = GL.UI:Canvas()
     local state = cv._gl_duckhunt
+    -- 校验尺寸/分值/颜色三档已就绪（大1/中2/小3）。
+    assert(state.tiers and #state.tiers == 3, "应有 3 个尺寸档")
+    assert(state.targets[1].score and state.targets[1].size, "目标应带 size/score（尺寸加权）")
     local before = GL.Match:GetContext().scores[GL.Roster:Me()] or 0
-    -- 模拟点中前 3 个目标各一次。
+    -- 模拟点中前 3 个目标各一次；分值按各自尺寸档累加。
+    local expect = 0
     for i = 1, 3 do
+        expect = expect + (state.targets[i].score or 1)
         env.fireScript(state.targets[i].frame, "OnMouseDown", "LeftButton")
     end
     local after = GL.Match:GetContext().scores[GL.Roster:Me()] or 0
-    assert(after == before + 3, string.format("分数应 +3：before=%d after=%d", before, after))
+    assert(after == before + expect, string.format("分数应 +%d：before=%d after=%d", expect, before, after))
 end)
 
 step("命中后目标重生（位置可能变）+ 继续移动不抛错", function()
     local cv = GL.UI:Canvas()
     for _ = 1, 5 do env.fireScript(cv, "OnUpdate", 0.05) end
-    -- 再点几次确认稳定累加。
+    -- 再点一次确认稳定累加（按该目标尺寸档分值）。
     local state = cv._gl_duckhunt
     local before = GL.Match:GetContext().scores[GL.Roster:Me()] or 0
+    local d2 = state.targets[2].score or 1
     env.fireScript(state.targets[2].frame, "OnMouseDown", "LeftButton")
-    assert((GL.Match:GetContext().scores[GL.Roster:Me()] or 0) == before + 1, "再次命中应 +1")
+    assert((GL.Match:GetContext().scores[GL.Roster:Me()] or 0) == before + d2, "再次命中应 +" .. d2)
 end)
 
 step("时间到 → stop 被调 + 收尾到 RESULTS/IDLE", function()

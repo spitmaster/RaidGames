@@ -115,7 +115,7 @@ step("正常跑帧 → 弹跳/计分不抛错，maxTier≥1", function()
     GL.Match:Close()
 end)
 
-step("坠出画布底部 → 死亡检测 → 立即出局结算（全新一局）", function()
+step("坠出底部 → 死亡 → 冻结 ~2s 后才结算（不立刻切结果）", function()
     GL.Match:Start("up100", { prize = { mode = "friendly" } })
     env.advance(5)   -- 进 PLAYING（OnUpdate 活着）
     local cv = GL.Match._api:Canvas()
@@ -125,9 +125,15 @@ step("坠出画布底部 → 死亡检测 → 立即出局结算（全新一局�
     G.vy = -50
     env.fireScript(cv, "OnUpdate", 0.05)
     assert(G.dead == true, "坠出底部应触发死亡")
-    env.advance(2)
+    -- 死亡当帧还不结算：先冻结显示死因（仍 PLAYING、未 Finish）。
+    local pMid = GL.Match:GetContext().phase
+    assert(pMid == "PLAYING", "死亡瞬间应仍冻结在 PLAYING（2s 后才结算），实际: " .. tostring(pMid))
+    assert(G.finished ~= true, "死亡瞬间不应已 Finish")
+    -- 推进：先过 2s 死亡冻结触发延时 Finish，再过 elimination 收集窗 → 结算。
+    env.advance(12)
+    assert(G.finished == true, "冻结结束后应已 Finish")
     local p = GL.Match:GetContext().phase
-    assert(p == "RESULTS" or p == "IDLE", "死亡后应立即结算，phase=" .. tostring(p))
+    assert(p == "RESULTS" or p == "IDLE", "冻结结束后应结算，phase=" .. tostring(p))
     GL.Match:Close()
 end)
 

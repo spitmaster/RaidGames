@@ -106,11 +106,16 @@ local function Build(body)
     local s = CreateFrame("Frame", nil, body)
     s._rows = {}
 
+    -- 返回大厅按钮（左上角）：让用户一眼就知道怎么回首页
+    local backBtn = W.Button(s, "返回大厅", "default", "sm")
+    backBtn:SetPoint("TOPLEFT", s, "TOPLEFT", 0, -2)
+    backBtn:SetScript("OnClick", function() GL.UI:ShowScreen(GL.UI._lastGameScreen or "lobby") end)
+
     ------------------------------------------------------------
     -- ① 5 个统计卡
     ------------------------------------------------------------
     local statsRow = CreateFrame("Frame", nil, s)
-    statsRow:SetPoint("TOPLEFT", s, "TOPLEFT", 0, 0)
+    statsRow:SetPoint("TOPLEFT", s, "TOPLEFT", 0, -34)   -- 给顶部「返回大厅」让位
     statsRow:SetPoint("RIGHT", s, "RIGHT", 0, 0)
     statsRow:SetHeight(64)
     s._cards = {}

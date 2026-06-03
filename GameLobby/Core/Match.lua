@@ -459,6 +459,16 @@ end
 function Match:_StartCountdown()
     local ctx = self._ctx
     setPhase(PHASE.COUNTDOWN)
+
+    -- 提前在倒计时就把场景摆好（游戏 setup「只建不动」，符合 game-dev-spec）：构造 api + host + setup，
+    -- 让玩家在 3-2-1 时透过半透明遮罩就看清是什么游戏、初始布局（start/收输入仍留到 GO）。
+    local def = GL.Games and GL.Games:Get(ctx.gameId)
+    Match._api = buildApi(ctx)
+    if GL.UI and GL.UI.ShowScreen then GL.UI:ShowScreen("playing") end   -- 先显示比赛屏 → 画布就绪供 setup 作画
+    callGame(def, "host", ctx, Match._api, ctx.isHost)   -- 仅 host
+    callGame(def, "setup", ctx, Match._api)              -- 建场景（不开循环、不收输入）
+    Match._sceneReady = true
+
     local mytick = bumpTick()
 
     local function step(n)
@@ -491,17 +501,21 @@ function Match:_BeginPlay()
 
     setPhase(PHASE.PLAYING)
     local def = GL.Games and GL.Games:Get(ctx.gameId)
-    local api = buildApi(ctx)
+    local api = Match._api or buildApi(ctx)        -- 复用倒计时已建好的 api（场景在倒计时已 setup）
     Match._api = api
 
     emit("MATCH_PLAY_BEGIN", ctx)
     if GL.UI and GL.UI.ShowScreen then GL.UI:ShowScreen("playing") end
 
     -- 调游戏生命周期（契约 §6 / game-dev-spec）：
-    --   host 端先 host()；再 setup()（建场景）；再 start()（开循环/收输入）。
+    --   场景已在倒计时阶段 host()+setup() 建好（_sceneReady）；这里 GO 只「开跑」start（开循环/收输入）。
+    --   异常兜底：若倒计时没建成场景，这里补 host()+setup()。
     --   旧契约游戏（极速按键 tier=score）无 start，则回落调 client()（向后兼容，不破坏 M1）。
-    callGame(def, "host", ctx, api, ctx.isHost)   -- 仅 host
-    callGame(def, "setup", ctx, api)
+    if not Match._sceneReady then
+        callGame(def, "host", ctx, api, ctx.isHost)   -- 仅 host
+        callGame(def, "setup", ctx, api)
+    end
+    Match._sceneReady = false
     if def and type(def.start) == "function" then
         callGame(def, "start", ctx, api)
     else

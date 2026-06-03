@@ -125,14 +125,16 @@ local function Build(body)
     overlay:SetAllPoints(s)
     overlay:SetFrameLevel(s:GetFrameLevel() + 20)
     overlay:EnableMouse(true)   -- 吃掉点击，避免倒计时中误点狂点钮
-    local odark = W.Solid(overlay, nil, 0.8, "BACKGROUND")
-    odark:SetAllPoints(overlay); odark:SetVertexColor(0, 0, 0, 0.8)
+    -- 半透明遮罩（0.5）：倒计时时游戏场景已在背后 setup 好，透过遮罩就能看清是什么游戏 + 初始布局。
+    local odark = W.Solid(overlay, nil, 0.5, "BACKGROUND")
+    odark:SetAllPoints(overlay); odark:SetVertexColor(0, 0, 0, 0.5)
     local cdNum = W.Text(overlay, "display", theme.font.countdown, "accent")
     cdNum:SetPoint("CENTER", overlay, "CENTER", 0, 20)
     overlay._num = cdNum
+    -- 副标题：常规倒计时不显示文案（游戏名已在 castbar + 场景可见）；仅平局加赛时 Popups 写「加 赛 · 并列 N 人」。
     local cdSub = W.Text(overlay, "display", theme.font.small, "textMute")
     cdSub:SetPoint("TOP", cdNum, "BOTTOM", 0, -16)
-    cdSub:SetText("准 备 · 极 速 按 键")
+    cdSub:SetText("")
     overlay._sub = cdSub   -- 暴露副标题，供平局加赛改成「加 赛」提示（Popups 驱动）
     overlay:Hide()
     s._overlay = overlay

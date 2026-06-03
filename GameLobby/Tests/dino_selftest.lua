@@ -118,11 +118,29 @@ step("跑动 → 距离/分数增长", function()
     assert(GL.Match._api:GetScore() == math.floor(G.dist / 12), "分数应等于 floor(dist/12)")
 end)
 
+step("吃加速道具 → 获得加速（boostT>0、不死）", function()
+    local cv = GL.Match._api:Canvas()
+    local G = ctxRef._dino
+    -- 清场：障碍全收，恐龙站地面，加速归零。
+    G.dead = false; G.jumpH = 0; G.vy = 0; G.ducking = false; G.boostT = 0
+    for i = 1, #G.obs do G.obs[i].active = false end
+    -- 在恐龙包围盒内放一颗道具（顶边对齐恐龙顶部，确保竖直重叠）。
+    local bz = G.boosts[1]
+    bz.active = true; bz.eaten = false
+    bz.x = G.DINO_X
+    bz.y = (G.GROUND_Y - G.jumpH) - G.DINO_H        -- 恐龙顶边附近
+    env.fireScript(cv, "OnUpdate", 0.03)
+    assert(G.boostT > 0, "吃到道具后 boostT 应 >0，实际: " .. tostring(G.boostT))
+    assert(G.dead == false, "吃道具不应致死")
+    assert(bz.active == false, "吃掉的道具应回收")
+end)
+
 step("撞障碍 → 死亡检测触发 → 立即出局结算", function()
     local cv = GL.Match._api:Canvas()
     local G = ctxRef._dino
-    G.dead = false; G.jumpH = 0; G.vy = 0; G.ducking = false
+    G.dead = false; G.jumpH = 0; G.vy = 0; G.ducking = false; G.boostT = 0
     for i = 1, #G.obs do G.obs[i].active = false end
+    for i = 1, #G.boosts do G.boosts[i].active = false end
     local o = G.obs[1]
     o.active = true; o.kind = "cactus"; o.w = 30; o.h = 44; o.groundOffset = 0; o.x = G.DINO_X
     env.fireScript(cv, "OnUpdate", 0.03)

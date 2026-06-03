@@ -5,14 +5,29 @@
 --   ★ 带刺平台「只要碰到就死」（不是落上才死）—— 任何方向的接触都判死（touch-death）。
 --   ★ 屏幕底部有一条不断上涨且越来越快的「地板/深渊」追着你 —— 爬慢了会被追上吞掉。层数高者胜。
 --
--- 层的结构（每层都可落脚 + 可选一块带刺平台）：
---   · 每层都有一块「安全平台」（土黄）→ 永远能继续往上跳（可解性）。
---   · 部分层额外有一块「带刺平台」（红+三角刺），放在远离安全链落脚走廊的一侧 → 沿安全链跳不会碰到。
+-- 关卡模型（2.1.0：每层一块平台，二选一；刺=「别落空」的惩罚位，永远可解）：
+--   · 每一层只有「一块」平台：要么是「可站立安全平台」（土黄、hasSpike=false、用 safeX），
+--     要么是「带刺平台」（红+三角刺、hasSpike=true、用 spikeX、碰到即死）。不再「安全+刺」并存。
+--   · 安全平台连成可攀爬的链：相邻两块安全平台相隔 1 或 2 层（随机），水平偏移 ≤ reachX（一跳够得着）。
+--   · 刺只出现在「相隔 2 层」时夹在中间那层（安全 A 在 T，安全 B 在 T+2，刺在 T+1）→ 自动杜绝「连续两层刺」。
 --
--- 可解性保证（两趟生成 + 走廊外放刺，已 sim 验证）：先生成安全链（相邻层水平偏移 ≤ reachX），
---   再把刺放到「角色沿安全链可达包络」之外 → 难但永远过得去。
+-- 可解性铁律（2.0.0 把刺挡在「正上方起跳通道」→ 上升必死，是 bug；本版彻底修掉）：
+--   ★ 刺绝不挡住「从 A 正上方竖直起跳」的通道：刺的 X 与起跳列保持 ≥ CLEAR(60px) 净空。
+--     → 永远存在解法：起跳后先「竖直」上升越过刺所在层（那一刻角色在 A 列、刺在 ≥CLEAR 外 = 安全），
+--       接近顶点再横移对准 B 落脚。CLEAR=60 > 上升期最大可控漂移(~48px)，连「全程朝刺侧推」也撞不到。
+--   ★ 跳跃顶点 apex = JUMP^2/(2*GRAVITY) = 700^2/3000 ≈ 163px（>2*72=144）→ 从 A 必能跳到正上方 2 层的 B（19px 富余）。
+--   ★ 刺的「意义」= 惩罚：你必须落在 B(T+2) 上；若没对准 B、落空下坠，会摔回刺(T+1)送命。刺偏 B 那一侧，
+--     想抄近路径直朝 B 冲、起步太早横移者会贴刺飞过 → 逼出「先竖直、后横移」的节奏。
 --
--- 不变量 #2（解耦）：只走 api。公平（§4）：api:Random 按种子两趟生成，各端一致。自包含（§6）：def 在 SOURCE。
+-- 死亡体验：撞刺/坠落/被吞后不立刻切结果屏，先冻结 ~2s 显示死因 + 到达层数，再结算（见 die()）。
+--
+-- 无敌星加速道具（2.2.0）：攀爬路径上确定性地（api:Random）每隔 7~11 块安全平台浮一颗金色「无敌星」五角星。
+--   角色 AABB 碰到即吃下 → 整局以 2× 速度运行 BOOST_DUR(2s)。实现用「子步 driver」：加速期一帧内跑 2 个
+--   子步、每子步同一 dt（保留碰撞精度、绝不穿模/穿过刺），真实 dt 只扣一次 → boost 真实时长就是 2 秒。
+--   收益：吃了不失误能明显多爬几层涨分；风险：2× 下手忙脚乱撞刺/落空更易死。加速期角色染金脉冲反馈。
+--   ★ 2.2.1：加速只快进「竖直上爬 + 地板」，左右移动速度保持 1×（横移按子步反比缩放）—— 避免操作被放大失控。
+--
+-- 不变量 #2（解耦）：只走 api。公平（§4）：api:Random 按种子生成，各端一致。自包含（§6）：def 在 SOURCE。
 
 local self = aura_env or {}
 
@@ -21,9 +36,9 @@ return {
     --==== 身份 ====--
     id        = "up100",
     name      = "是男人就上 100 层",
-    version   = "1.3.0",
+    version   = "2.2.1",
     glyph     = "Interface\\Icons\\Ability_Hunter_Pathfinding",
-    descLines = { "弹跳往上，地板在追", "碰刺即死，越高越强" },
+    descLines = { "弹跳往上，地板在追", "碰刺即死，吃星加速" },
 
     --==== 元数据 ====--
     tier        = "canvas",
@@ -52,52 +67,112 @@ return {
         G.charSize = 18
         G.pltW     = 78
         G.pltH     = 10
-        G.gapY     = 64
+        G.gapY     = 72                          -- 层距（2.0.0：64→72，稍大）
         G.scrollY  = H * 0.46
         local SBW, SBH, LAYERS = 14, 12, 5
         G.SBW, G.SBH, G.LAYERS = SBW, SBH, LAYERS
         G.SPIKE_HIT = SBH                        -- 刺的判定额外向上加 SBH（覆盖三角刺，碰到即死）
 
-        --==== 两趟生成关卡（各端一致）====--
+        --==== 单趟生成关卡：安全链 +（隔 2 层时）夹层刺（各端一致）====--
+        -- 模型：每层一块平台。安全平台沿链递进（相隔 1 或 2 层）；相隔 2 层时，中间那层放刺。
+        -- 刺放置铁律：与「起跳列」保持 CLEAR 净空 → 任何关卡都能「先竖直越过刺、再横移对准 B」过去（可解性优先）。
         local layers = 220
-        local reachX = 60                        -- 安全链相邻层水平偏移（小→走廊窄→好放刺）
+        local reachX = 100                       -- 相邻两块安全平台的水平最大偏移（一跳够得着+够横向对准）
+        local CLEAR  = 60                        -- 刺距起跳列的最小净空（> 上升期最大可控漂移 ~48px，连全程推也撞不到）
         local CHAR = G.charSize
-        local SPIKE_PCT = 48
-        local MARGIN = 8
         local minPx, maxPx = 8, W - G.pltW - 8
         if maxPx < minPx then maxPx = minPx end
         G.layers = {}
-        -- 趟 1：安全链。
-        local lastSafe = math.floor((minPx + maxPx) / 2)
+        -- 先全部置空（默认无平台，下面再填）。
         for i = 1, layers do
-            local lo = math.max(minPx, lastSafe - reachX)
-            local hi = math.min(maxPx, lastSafe + reachX)
-            if hi < lo then hi = lo end
-            local sx = (i == 1) and lastSafe or api:Random(math.floor(lo), math.floor(hi))
-            G.layers[i] = { worldY = i * G.gapY, safeX = sx, tier = i, hasSpike = false, spikeX = 0 }
-            lastSafe = sx
+            G.layers[i] = { worldY = i * G.gapY, tier = i, hasSpike = false, safeX = 0, spikeX = 0 }
         end
-        -- 趟 2：在「角色沿安全链可达包络」之外放刺（前 2 层不放，给安全起步）。
-        for i = 3, layers do
-            if api:Random(1, 100) <= SPIKE_PCT then
-                local lo, hi = 1e9, -1e9
-                for j = math.max(1, i - 1), math.min(layers, i + 1) do
-                    local c1 = G.layers[j].safeX - reachX - CHAR
-                    local c2 = G.layers[j].safeX + G.pltW + reachX + CHAR
-                    if c1 < lo then lo = c1 end
-                    if c2 > hi then hi = c2 end
+
+        -- 安全链：从第 1 层起步，每步前进 1 或 2 层（前 2 层强制每层安全，给稳妥起步）。
+        local startX = math.floor((minPx + maxPx) / 2)
+        G.layers[1].hasSpike = false; G.layers[1].safeX = startX
+        G.layers[2].hasSpike = false
+        do
+            local lo = math.max(minPx, startX - reachX)
+            local hi = math.min(maxPx, startX + reachX)
+            if hi < lo then hi = lo end
+            G.layers[2].safeX = api:Random(math.floor(lo), math.floor(hi))
+        end
+
+        local lastSafeTier = 2
+        local lastSafeX = G.layers[2].safeX
+        while lastSafeTier < layers do
+            -- 下一块安全平台相隔 1 或 2 层。
+            local step = api:Random(1, 2)
+            local nextTier = lastSafeTier + step
+            if nextTier > layers then nextTier = layers; step = nextTier - lastSafeTier end
+            -- 安全 B 的 X：在 reachX 范围内随机（一跳够得着）。
+            local lo = math.max(minPx, lastSafeX - reachX)
+            local hi = math.min(maxPx, lastSafeX + reachX)
+            if hi < lo then hi = lo end
+            local nextX = api:Random(math.floor(lo), math.floor(hi))
+            local nb = G.layers[nextTier]
+            nb.hasSpike = false; nb.safeX = nextX
+
+            -- 若相隔 2 层 → 中间那层放刺（与起跳列保持 CLEAR 净空 → 永远可解）。
+            if step == 2 then
+                local midTier = lastSafeTier + 1
+                local mid = G.layers[midTier]
+                -- 起跳列：角色站在 A 中央起跳（中心 cx0）。净空区 = 该列两侧各留 CLEAR，刺不得侵入。
+                local cx0     = lastSafeX + G.pltW * 0.5
+                local halfC   = CHAR * 0.5
+                local clearLo = cx0 - halfC - CLEAR    -- 刺右缘须 ≤ 此值（放左侧）
+                local clearHi = cx0 + halfC + CLEAR    -- 刺左缘须 ≥ 此值（放右侧）
+                local function clears(x) return (x + G.pltW <= clearLo) or (x >= clearHi) end
+                -- 朝 B 那一侧放刺（B≈正上方则随机一侧）：想抄近路朝 B 冲、横移太早者会贴刺 → 逼「先竖直后横移」。
+                local dir
+                if nextX > lastSafeX + 4 then dir = 1
+                elseif nextX < lastSafeX - 4 then dir = -1
+                else dir = (api:Random(0, 1) == 0) and -1 or 1 end
+                local function place(d) if d > 0 then return clearHi else return clearLo - G.pltW end end
+                local sx = place(dir)
+                if sx < minPx then sx = minPx end
+                if sx > maxPx then sx = maxPx end
+                if not clears(sx) then                 -- 该侧夹回后侵入净空（画布这侧太窄）→ 换另一侧
+                    sx = place(-dir)
+                    if sx < minPx then sx = minPx end
+                    if sx > maxPx then sx = maxPx end
                 end
-                local rightLo = math.ceil(hi) + MARGIN
-                local rightHi = W - G.pltW
-                local leftHi  = math.floor(lo) - MARGIN - G.pltW
-                local canR = rightLo <= rightHi
-                local canL = leftHi >= 0
-                if canR and canL then
-                    if (rightHi - rightLo) >= leftHi then G.layers[i].spikeX = api:Random(rightLo, rightHi)
-                    else G.layers[i].spikeX = api:Random(0, leftHi) end
-                    G.layers[i].hasSpike = true
-                elseif canR then G.layers[i].spikeX = api:Random(rightLo, rightHi); G.layers[i].hasSpike = true
-                elseif canL then G.layers[i].spikeX = api:Random(0, leftHi); G.layers[i].hasSpike = true end
+                if clears(sx) then
+                    mid.hasSpike = true; mid.spikeX = math.floor(sx); mid.safeX = 0
+                else
+                    -- 两侧都放不下「带净空」的刺（画布太窄）→ 退化为安全平台，绝不卡死（可解性优先）。
+                    mid.hasSpike = false; mid.safeX = lastSafeX
+                end
+            end
+
+            lastSafeTier = nextTier
+            lastSafeX = nextX
+        end
+
+        --==== 无敌星放置（确定性、在攀爬路径上）====--
+        -- 必须在关卡生成完之后追加（绝不打乱上面安全链/刺的 RNG 调用顺序）。全程 api:Random（各端一致），绝不用 math.random。
+        -- 规则：遍历安全平台链，每隔 api:Random(7,11) 块安全平台，在该平台上方约 0.45 层、X 居中处放一颗星。
+        G.STAR_SZ = 24
+        G.stars = {}
+        do
+            local STAR_SZ = G.STAR_SZ
+            local sinceStar = 0
+            local nextGap = api:Random(7, 11)
+            for i = 1, layers do
+                local L = G.layers[i]
+                if not L.hasSpike and L.safeX and L.safeX > 0 then
+                    sinceStar = sinceStar + 1
+                    if sinceStar >= nextGap then
+                        sinceStar = 0
+                        nextGap = api:Random(7, 11)
+                        local sx = L.safeX + (G.pltW - STAR_SZ) / 2     -- X 居中于该安全平台
+                        if sx < 0 then sx = 0 end
+                        if sx > W - STAR_SZ then sx = W - STAR_SZ end
+                        local sy = L.worldY + G.pltH + G.gapY * 0.45      -- 平台顶上方约 0.45 层（要跳起来才够）
+                        G.stars[#G.stars + 1] = { worldY = sy, x = sx, eaten = false }
+                    end
+                end
             end
         end
 
@@ -107,7 +182,7 @@ return {
         ch:SetSize(G.charSize, G.charSize)
         G.charTex = ch
 
-        --==== 对象池：每槽 = 安全平台 + 刺平台 + 一排三角刺 ====--
+        --==== 对象池：每槽 = 安全平台 OR 刺平台（一块）+ 一排三角刺 ====--
         local poolN = math.ceil(H / G.gapY) + 3
         local maxSpikes = math.ceil(G.pltW / SBW)
         G.pool = {}
@@ -131,11 +206,11 @@ return {
             G.pool[i] = { safeTex = safeTex, spikeTex = spikeTex, spikes = spikes }
         end
 
-        -- 把第 slot 个池槽画成 layer L（y = 平台底距画布底，向上为正）。
+        -- 把第 slot 个池槽画成 layer L（y = 平台底距画布底，向上为正）。每层只画一块平台。
         G.drawSlot = function(slot, L, y)
-            local s = slot.safeTex
-            s:ClearAllPoints(); s:SetPoint("BOTTOMLEFT", cv, "BOTTOMLEFT", L.safeX, y); s:Show()
             if L.hasSpike then
+                -- 刺平台：画红底 + 三角刺，隐藏安全块。
+                slot.safeTex:Hide()
                 local r = slot.spikeTex
                 r:ClearAllPoints(); r:SetPoint("BOTTOMLEFT", cv, "BOTTOMLEFT", L.spikeX, y); r:Show()
                 local nSp = math.floor(G.pltW / SBW); if nSp < 1 then nSp = 1 end
@@ -158,6 +233,9 @@ return {
                     end
                 end
             else
+                -- 安全平台：画土黄块，隐藏刺。
+                local s = slot.safeTex
+                s:ClearAllPoints(); s:SetPoint("BOTTOMLEFT", cv, "BOTTOMLEFT", L.safeX, y); s:Show()
                 slot.spikeTex:Hide()
                 for si = 1, #slot.spikes do for k = 1, #slot.spikes[si] do slot.spikes[si][k]:Hide() end end
             end
@@ -167,7 +245,65 @@ return {
             for si = 1, #slot.spikes do for k = 1, #slot.spikes[si] do slot.spikes[si][k]:Hide() end end
         end
 
-        --==== 初始姿态：角色站在第一层，地板从底部起 ====--
+        --==== 无敌星纹理对象池（复用，不每帧 CreateTexture）====--
+        -- 五角星位图（13×13，"1"=实心），逐行 RLE 并成横向 run，金色矩形画出（程序化，不依赖贴图文件）。
+        local STAR_SZ = G.STAR_SZ
+        local STAR_BMP = {
+            "0000001000000", "0000011100000", "0000011100000", "0000111110000",
+            "1111111111111", "0111111111110", "0011111111100", "0001111111000",
+            "0001111111000", "0011110111100", "0111100011110", "1111000001111",
+            "1110000000111",
+        }
+        local STAR_BW, STAR_BH = #STAR_BMP[1], #STAR_BMP
+        local STAR_RUNS = {}
+        for r = 1, STAR_BH do
+            local line = STAR_BMP[r]; local c = 1
+            while c <= STAR_BW do
+                if line:sub(c, c) == "1" then
+                    local len = 1
+                    while (c + len) <= STAR_BW and line:sub(c + len, c + len) == "1" do len = len + 1 end
+                    STAR_RUNS[#STAR_RUNS + 1] = { row = r - 1, col0 = c - 1, len = len }
+                    c = c + len
+                else c = c + 1 end
+            end
+        end
+        local SCX, SCY = STAR_SZ / STAR_BW, STAR_SZ / STAR_BH    -- 每逻辑像素 → 画布像素
+        G.C_STAR  = { 1.0, 0.86, 0.22 }                          -- 亮金
+        G.C_STARD = { 0.5, 0.40, 0.12 }                          -- 暗金
+        -- 每颗星 = #STAR_RUNS 个 OVERLAY 纹理；池大小 = 屏内最多可见星数（保守给足）。
+        local starPoolN = math.ceil(H / (G.gapY)) + 4
+        if starPoolN < 4 then starPoolN = 4 end
+        G.starPool = {}
+        for i = 1, starPoolN do
+            local rects = {}
+            for k = 1, #STAR_RUNS do
+                local t = cv:CreateTexture(nil, "OVERLAY")
+                t:SetColorTexture(G.C_STAR[1], G.C_STAR[2], G.C_STAR[3], 1)
+                t:Hide()
+                rects[k] = t
+            end
+            G.starPool[i] = rects
+        end
+        -- placeStar：把一组星纹理（rects）画到 canvas 坐标 (x, projY)（左下原点、向上为正；projY=星框底边距画布底）。
+        G.placeStar = function(rects, x, projY, blink)
+            local col = blink and G.C_STAR or G.C_STARD
+            for k = 1, #STAR_RUNS do
+                local run = STAR_RUNS[k]
+                local t = rects[k]
+                t:SetColorTexture(col[1], col[2], col[3], 1)
+                t:SetSize(run.len * SCX, SCY + 0.5)
+                t:ClearAllPoints()
+                -- 位图 row=0 是星顶 → 画到框顶（projY + STAR_SZ 处往下数）。
+                t:SetPoint("BOTTOMLEFT", cv, "BOTTOMLEFT",
+                    x + run.col0 * SCX, projY + (STAR_BH - 1 - run.row) * SCY)
+                t:Show()
+            end
+        end
+        G.hideStar = function(rects)
+            for k = 1, #rects do rects[k]:Hide() end
+        end
+
+        --==== 初始姿态：角色站在第一层（安全），地板从底部起 ====--
         G.camY = 0
         local p1 = G.layers[1]
         G.charX = p1.safeX + (G.pltW - G.charSize) / 2
@@ -175,14 +311,21 @@ return {
         G.vy = 0
         G.maxTier = 1
         G.elapsed = 0
+        G.boostT = 0                             -- 剩余加速秒数（>0 时整局 2× 子步运行）
         G.held = { left = false, right = false }
         G.dead = false
 
         local dtext = cv:CreateFontString(nil, "OVERLAY", "GameFontNormalHuge")
-        dtext:SetPoint("CENTER", cv, "CENTER", 0, 0)
+        dtext:SetPoint("CENTER", cv, "CENTER", 0, 18)
         dtext:SetTextColor(1.0, 0.35, 0.25)
         dtext:Hide()
         G.deathText = dtext
+        -- 死亡副标题：到达层数 + 「即将结算」提示（死后冻结 ~2s 再切结果，让玩家看清，见 die()）。
+        local dsub = cv:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+        dsub:SetPoint("TOP", dtext, "BOTTOM", 0, -10)
+        dsub:SetTextColor(1.0, 0.82, 0.30)
+        dsub:Hide()
+        G.deathSub = dsub
 
         api.G = G
     end,
@@ -208,36 +351,57 @@ return {
         local SPIKE_HIT = G.SPIKE_HIT
         local MOVE = 340
         local GRAVITY = 1500
-        local JUMP = 520               -- 弹跳 ~1.4 层：稳稳够到上一层、几乎不过冲（便于刺的走廊保证）
-        -- 地板上涨「慢→快」：越往后追得越凶 → 爬慢者被吞，分数拉开避免平局。
-        local AS_MIN, AS_MAX, RAMP = 60, 240, 24
+        local JUMP = 700               -- apex=JUMP^2/(2*GRAVITY)≈163px（>2*72=144）→ 从安全 A 稳跳到正上方 2 层的安全 B（19px 富余）
+        -- 地板上涨「慢→快」：峰值(185) < 连跳 2 层的净爬升(≈217px/s) → 手稳者永远爬得过地板；
+        -- 手生者（一跳只上 1 层≈86px/s）会被吞 → 分数按熟练度拉开，避免人人满分平局。
+        local AS_MIN, AS_MAX, RAMP = 70, 185, 22
+
+        local DEATH_HOLD = 2.0         -- 死后冻结秒数：先让玩家看清「怎么死的/到第几层」，再结算（不立刻切结果屏）
 
         local function projY(worldY) return worldY - G.camY end
 
         local function die(msg)
             if G.dead then return end
             G.dead = true
-            if G.cv then G.cv:SetScript("OnUpdate", nil) end
+            if G.cv then G.cv:SetScript("OnUpdate", nil) end     -- 冻结画面（停物理）
             if G.deathText then G.deathText:SetText(msg); G.deathText:Show() end
-            api:Finish(G.maxTier - 1)
+            if G.deathSub then
+                G.deathSub:SetText(string.format("到达第 %d 层 · %d 秒后结算…", G.maxTier - 1, DEATH_HOLD))
+                G.deathSub:Show()
+            end
+            -- 死后不立刻 Finish：冻结 ~2s 显示死因，再结算（elimination）。用 C_Timer 延时（真机/无头都支持）。
+            if _G.C_Timer and _G.C_Timer.After then
+                _G.C_Timer.After(DEATH_HOLD, function()
+                    if G.aborted or G.finished then return end    -- 比赛已关闭/已结算 → 丢弃迟到回调
+                    G.finished = true
+                    api:Finish(G.maxTier - 1)
+                end)
+            else
+                G.finished = true
+                api:Finish(G.maxTier - 1)                          -- 兜底：无 C_Timer 时直接结算
+            end
         end
         G._die = die
 
         G.vy = JUMP                    -- 开局第一跳
 
-        G.cv:SetScript("OnUpdate", function(_, dt)
-            if G.dead then return end
-            dt = tonumber(dt) or 0
-            if dt <= 0 then return end
-            if dt > 0.05 then dt = 0.05 end
+        local STAR_SZ = G.STAR_SZ
+        local BOOST_DUR = 2.0          -- 吃星后的加速持续秒数（真实时长；driver 里 dt 只扣一次）
+        local C_CHAR = { 0.30, 0.85, 1.0 }    -- 角色常态青色
 
+        -- 单帧物理体：被 driver 调用 1 次（常态）或 2 次（加速）。dt 已由 driver clamp，这里不再 clamp。
+        -- hmove = 横向移动的本子步缩放（driver 传 1/steps）：加速期跑 2 子步、每步横移 ×0.5 → 左右总速仍是 1×，
+        --   只「快进」竖直上爬 + 地板（修复「吃星后左右移动也跟着变快、操作被放大失控」）。
+        -- 凡 die(...) 后 return：return 只结束本子步，driver 检测 G.dead 跳出。
+        local function frameStep(dt, hmove)
+            hmove = hmove or 1
             local autoScroll = AS_MIN + (AS_MAX - AS_MIN) * math.min(1, G.elapsed / RAMP)
-            G.elapsed = G.elapsed + dt
+            G.elapsed = G.elapsed + dt    -- 加速时游戏时间也 2× 是预期的「快进」（仅竖直/地板，横移不受影响）
 
-            -- 左右移动。
+            -- 左右移动（横移速度恒定 1×，不随加速放大）。
             local dx = 0
-            if G.held.left then dx = dx - MOVE * dt end
-            if G.held.right then dx = dx + MOVE * dt end
+            if G.held.left then dx = dx - MOVE * dt * hmove end
+            if G.held.right then dx = dx + MOVE * dt * hmove end
             G.charX = G.charX + dx
             if G.charX < 0 then G.charX = 0 end
             if G.charX > W - cs then G.charX = W - cs end
@@ -252,21 +416,38 @@ return {
             local n = #G.layers
             for i = math.max(1, baseIdx - 1), math.min(n, baseIdx + 3) do
                 local L = G.layers[i]
-                -- 带刺平台：任何接触即死（touch-death，含三角刺高度 SPIKE_HIT）。
                 if L.hasSpike then
+                    -- 带刺平台：任何接触即死（touch-death，含三角刺高度 SPIKE_HIT）。
                     if (G.charX < L.spikeX + pltW) and (G.charX + cs > L.spikeX)
                        and (G.charWorldY < L.worldY + pltH + SPIKE_HIT) and (G.charWorldY + cs > L.worldY) then
                         die("扎 死 在 刺 上！"); return
                     end
+                else
+                    -- 安全平台：仅下落中、本帧脚底自上而下穿过平台顶、x 重叠 → 弹起。
+                    if G.vy <= 0 then
+                        local top = L.worldY + pltH
+                        if prevWorldY >= top - 1 and G.charWorldY <= top
+                           and (G.charX + cs > L.safeX) and (G.charX < L.safeX + pltW) then
+                            G.charWorldY = top
+                            G.vy = JUMP
+                            if L.tier > G.maxTier then G.maxTier = L.tier end
+                        end
+                    end
                 end
-                -- 安全平台：仅下落中、本帧脚底自上而下穿过平台顶、x 重叠 → 弹起。
-                if G.vy <= 0 then
-                    local top = L.worldY + pltH
-                    if prevWorldY >= top - 1 and G.charWorldY <= top
-                       and (G.charX + cs > L.safeX) and (G.charX < L.safeX + pltW) then
-                        G.charWorldY = top
-                        G.vy = JUMP
-                        if L.tier > G.maxTier then G.maxTier = L.tier end
+            end
+
+            -- 无敌星拾取：角色位置更新后、重绘前。未 eaten 且 AABB 重叠 → 吃下、（重）触发加速。
+            if G.stars then
+                local clo, chi = G.charX, G.charX + cs
+                local cblo, cbhi = G.charWorldY, G.charWorldY + cs
+                for si = 1, #G.stars do
+                    local s = G.stars[si]
+                    if not s.eaten then
+                        if (clo < s.x + STAR_SZ) and (chi > s.x)
+                           and (cblo < s.worldY + STAR_SZ) and (cbhi > s.worldY) then
+                            s.eaten = true
+                            G.boostT = BOOST_DUR
+                        end
                     end
                 end
             end
@@ -282,11 +463,20 @@ return {
 
             api:SetScore(G.maxTier - 1)
 
-            -- 重绘。
+            -- 重绘：角色（加速期染金脉冲，否则常态青）。
+            local boosting = (G.boostT or 0) > 0
             local ch = G.charTex
+            if boosting then
+                if math.floor(G.elapsed * 12) % 2 == 0 then ch:SetColorTexture(1.0, 0.86, 0.22, 1.0)
+                else ch:SetColorTexture(0.6, 0.5, 0.15, 1.0) end
+            else
+                ch:SetColorTexture(C_CHAR[1], C_CHAR[2], C_CHAR[3], 1.0)
+            end
             ch:ClearAllPoints()
             ch:SetPoint("BOTTOMLEFT", G.cv, "BOTTOMLEFT", G.charX, projY(G.charWorldY))
             ch:Show()
+
+            -- 重绘：平台。
             local slotIdx = 1
             for i = 1, n do
                 local L = G.layers[i]
@@ -301,17 +491,58 @@ return {
                 end
             end
             for j = slotIdx, #G.pool do G.hideSlot(G.pool[j]) end
+
+            -- 重绘：无敌星（明暗脉冲；只画投影落在画布内的未吃星，复用 starPool）。
+            if G.stars and G.starPool then
+                local blink = (math.floor(G.elapsed * 6) % 2 == 0)
+                local sp = 1
+                for si = 1, #G.stars do
+                    local s = G.stars[si]
+                    if not s.eaten then
+                        local py = projY(s.worldY)
+                        if py > -STAR_SZ and py < H then
+                            local rects = G.starPool[sp]
+                            if rects then
+                                G.placeStar(rects, s.x, py, blink)
+                                sp = sp + 1
+                            end
+                        end
+                    end
+                end
+                for j = sp, #G.starPool do G.hideStar(G.starPool[j]) end
+            end
+        end
+        G._frameStep = frameStep
+
+        -- driver：一帧内跑 1（常态）或 2（加速）个子步，每子步同一 dt → 2× 速度但保留碰撞精度，绝不穿模。
+        -- 真实 dt 只扣一次 boostT → boost 真实时长就是 BOOST_DUR(2s)。
+        G.cv:SetScript("OnUpdate", function(_, dt)
+            if G.dead then return end
+            dt = tonumber(dt) or 0
+            if dt <= 0 then return end
+            if dt > 0.05 then dt = 0.05 end
+            local boosting = (G.boostT or 0) > 0
+            if boosting then G.boostT = G.boostT - dt end
+            local steps = boosting and 2 or 1
+            local hmove = 1 / steps        -- 横移按子步数反比缩放 → 加速期左右速度不变（只快进竖直+地板）
+            for _ = 1, steps do
+                if G.dead then break end
+                frameStep(dt, hmove)
+            end
         end)
     end,
 
     stop = function(ctx, api)
         local G = api.G
-        if G and G.cv then G.cv:SetScript("OnUpdate", nil) end
+        if not G then return end
+        G.aborted = true                 -- 停止后作废在途的死亡延时回调
+        if G.cv then G.cv:SetScript("OnUpdate", nil) end
     end,
 
     teardown = function(ctx, api)
         local G = api.G
         if not G then return end
+        G.aborted = true                 -- 作废任何在途的死亡延时回调（别 Finish 到下一局）
         if G.cv then G.cv:SetScript("OnUpdate", nil) end
         if G.charTex then G.charTex:Hide() end
         if G.pool then for _, slot in ipairs(G.pool) do
@@ -319,7 +550,11 @@ return {
             if slot.spikeTex then slot.spikeTex:Hide() end
             if slot.spikes then for s = 1, #slot.spikes do for k = 1, #slot.spikes[s] do slot.spikes[s][k]:Hide() end end end
         end end
+        if G.starPool then for _, rects in ipairs(G.starPool) do
+            for k = 1, #rects do rects[k]:Hide() end
+        end end
         if G.deathText then G.deathText:Hide() end
+        if G.deathSub then G.deathSub:Hide() end
         api.G = nil
     end,
 

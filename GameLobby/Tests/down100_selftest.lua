@@ -129,17 +129,22 @@ step("落到新平台 → depth+1（确定性计分）", function()
     assert(GL.Match._api:GetScore() == G.depth, "SetScore 未推到 ctx.scores")
 end)
 
-step("坠出底部 → 死亡检测触发 → 立即出局结算", function()
+step("坠出底部 → 死亡 → 冻结 ~2s 后才结算（不立刻切结果）", function()
     local cv = GL.Match._api:Canvas()
     local G = ctxRef._d100
     G.dead = false; G.rest = nil
     G.heroY = G.H + 50                        -- 放到画布底部以下 → 应判「坠落出局」
     env.fireScript(cv, "OnUpdate", 0.05)
     assert(G.dead == true, "坠出底部应触发死亡")
-    -- 单人 elimination：die→api:Finish→_EndPlay→收集→Tally。advance 收尾。
-    env.advance(2)
+    -- 死亡当帧还不结算：先冻结显示死因（仍 PLAYING、未 Finish）。
+    local pMid = GL.Match:GetContext().phase
+    assert(pMid == "PLAYING", "死亡瞬间应仍冻结在 PLAYING（2s 后才结算），实际: " .. tostring(pMid))
+    assert(G.finished ~= true, "死亡瞬间不应已 Finish")
+    -- 推进：先过 2s 死亡冻结触发延时 Finish，再过 elimination 收集窗 → 结算。
+    env.advance(12)
+    assert(G.finished == true, "冻结结束后应已 Finish")
     local p = GL.Match:GetContext().phase
-    assert(p == "RESULTS" or p == "IDLE", "死亡后应立即结算，phase=" .. tostring(p))
+    assert(p == "RESULTS" or p == "IDLE", "冻结结束后应结算，phase=" .. tostring(p))
 end)
 
 step("Close 不抛错", function() GL.Match:Close(); assert(true) end)

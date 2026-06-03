@@ -121,15 +121,15 @@ function GL.UI:Countdown(n)
     local overlay = self._cdOverlay
     if not overlay then return end
 
-    -- 副标题：平局加赛时显示「加 赛 · 并列 N 人」，否则常规「准 备 · 极 速 按 键」。
+    -- 副标题：平局加赛时显示「加 赛 · 并列 N 人」；常规倒计时不显示文案
+    -- （游戏名在 castbar、场景已透过半透明遮罩可见，无需再写「准备·游戏名」）。
     -- _tiebreakInfo 由 MATCH_TIE 设置，倒计时结束（GO）后清除，避免污染下一局正赛。
     if overlay._sub then
         if self._tiebreakInfo then
             overlay._sub:SetText(self._tiebreakInfo)
             overlay._sub:SetTextColor(theme:RGB("accent"))
         else
-            overlay._sub:SetText("准 备 · 极 速 按 键")
-            overlay._sub:SetTextColor(theme:RGB("textMute"))
+            overlay._sub:SetText("")
         end
     end
 

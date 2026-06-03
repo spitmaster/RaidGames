@@ -111,71 +111,10 @@ local function BuildFrame()
     f._badge = badge
     f._badgeText = badgeText
 
-    -- 左上「分享游戏」按钮（贴徽章右侧）：插件↔插件传播小游戏（D19）。
-    -- 点击弹出可分享游戏列表 → 选一个 → 导出 !GL: 串供 Ctrl+C 发给朋友（对方大厅「导入游戏」框粘入）。
-    -- 即时直推走另一条：右键参赛者卡 → 推送游戏（GL.Push）。
-    local shareBtn = CreateFrame("Button", nil, title)
-    shareBtn:SetSize(78, 22)
-    shareBtn:SetPoint("LEFT", badge, "RIGHT", 8, 0)
-    W.PanelBG(shareBtn, "panel2"); W.MetalBorder(shareBtn, "thin")
-    local shareFs = W.Text(shareBtn, "display", theme.font.btnSm, "textDim")
-    shareFs:SetPoint("CENTER")
-    shareFs:SetText("|TInterface\\ChatFrame\\UI-ChatIcon-Share:0|t 分享游戏")
-    shareBtn._fs = shareFs
-    shareBtn:SetScript("OnEnter", function(s)
-        s._fs:SetTextColor(theme:RGB("accent"))
-        for _, ring in ipairs(s._borders or {}) do
-            for _, e in pairs(ring) do e:SetVertexColor(theme:RGB("accent")) end
-        end
-    end)
-    shareBtn:SetScript("OnLeave", function(s)
-        s._fs:SetTextColor(theme:RGB("textDim"))
-        for _, ring in ipairs(s._borders or {}) do
-            for _, e in pairs(ring) do e:SetVertexColor(theme:RGB("frameDark")) end
-        end
-    end)
-    shareBtn:SetScript("OnClick", function(s)
-        if not (GL.Games and GL.Games.List and EasyMenu) then
-            if GL.UI.Log then GL.UI:Log("warn", "游戏列表尚未就绪") end
-            return
-        end
-        local menu = { { text = "分享游戏字符串", isTitle = true, notCheckable = true } }
-        local any = false
-        local ok, list = pcall(function() return GL.Games:List() end)
-        for _, def in ipairs((ok and list) or {}) do
-            if not def.locked and type(def.code) == "string" and def.code ~= "" then
-                any = true
-                local id, name = def.id, def.name or def.id
-                menu[#menu + 1] = {
-                    text = name, notCheckable = true,
-                    func = function()
-                        if not (GL.Import and GL.Import.ExportGame) then
-                            if GL.UI.Log then GL.UI:Log("warn", "导出模块未就绪") end
-                            return
-                        end
-                        local str, why = GL.Import:ExportGame(id)
-                        if type(str) == "string" then
-                            GL.UI:ShowExport("分享：" .. name, str)
-                        elseif GL.UI.Log then
-                            GL.UI:Log("warn", why or "导出失败")
-                        end
-                    end,
-                }
-            end
-        end
-        if not any then
-            menu[#menu + 1] = { text = "（暂无可分享的游戏）", notCheckable = true, disabled = true }
-        end
-        menu[#menu + 1] = { text = "取消", notCheckable = true, func = function() end }
-        if not GL.UI._shareDropdown then
-            GL.UI._shareDropdown = CreateFrame("Frame", "GameLobbyShareDropdown", UIParent, "UIDropDownMenuTemplate")
-        end
-        EasyMenu(menu, GL.UI._shareDropdown, s, 0, 0, "MENU")
-    end)
-    f._shareBtn = shareBtn
+    -- （已移除左上「分享游戏」按钮：分享入口保留「右键游戏格 → 导出字符串」与「右键参赛者卡 → 推送游戏」。）
 
     ----------------------------------------------------------------
-    -- 标题栏右上按钮：[战史][关于][✕]
+    -- 标题栏右上按钮：[记录][关于][✕]
     ----------------------------------------------------------------
     local function titleAction(text, ox)
         local b = CreateFrame("Button", nil, title)
@@ -210,7 +149,7 @@ local function BuildFrame()
     closeBtn:SetScript("OnClick", function() GL.UI:Hide() end)
 
     local aboutBtn = titleAction("关 于", -44)
-    local histBtn  = titleAction("战 史", -96)
+    local histBtn  = titleAction("记 录", -96)
     histBtn:SetScript("OnClick", function() GL.UI:ToggleScreen("history") end)
     aboutBtn:SetScript("OnClick", function() GL.UI:ToggleScreen("about") end)
     f._histBtn = histBtn
